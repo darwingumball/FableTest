@@ -238,14 +238,28 @@ namespace Game.Admin
                                        : $"PSX internal resolution -> {height}p.";
                 }
 
+                case "light":
+                {
+                    if (args.Length < 2) return "usage: light <group|all> <multiplier>  |  light list";
+                    if (args[1].Equals("list", StringComparison.OrdinalIgnoreCase))
+                        return World.PracticalLight.DescribeGroups();
+                    if (args.Length < 3) return "usage: light <group|all> <multiplier>";
+                    float scale = Mathf.Clamp(ParseFloat(args[2], 1f), 0f, 20f);
+                    LightScaleClientRpc(new FixedString32Bytes(args[1]), scale);
+                    return $"Light group '{args[1]}' -> x{scale:0.##} (all clients).";
+                }
+
                 case "goto":
                 {
-                    if (args.Length < 2) return "usage: goto <storefront|warehouse|spawn>";
+                    if (args.Length < 2)
+                        return "usage: goto <storefront|warehouse|street|apartment|spawn>";
                     Vector3 target;
                     switch (args[1].ToLowerInvariant())
                     {
                         case "storefront": target = new Vector3(-26f, 1f, 28f); break;
                         case "warehouse": target = new Vector3(26f, 1f, -10f); break;
+                        case "street": target = new Vector3(0f, 1f, -35f); break;
+                        case "apartment": target = new Vector3(0f, 1f, 44f); break;
                         case "spawn": target = new Vector3(0f, 1f, 0f); break;
                         default: return $"Unknown location '{args[1]}'.";
                     }
@@ -311,6 +325,10 @@ namespace Game.Admin
         }
 
         [ClientRpc]
+        private void LightScaleClientRpc(FixedString32Bytes group, float scale) =>
+            World.PracticalLight.SetGroupScale(group.ToString(), scale);
+
+        [ClientRpc]
         private void SpeedClientRpc(float multiplier, ClientRpcParams _)
         {
             var player = NetworkPlayer.Local;
@@ -366,8 +384,10 @@ namespace Game.Admin
             "  exposure <evBias>                      negative = brighter, 0 = default\n" +
             "  dither <0-2>                           PSX dither, 0 = off (default)\n" +
             "  res <height|native>                    PSX internal res: 240/360/480/native\n" +
+            "  light <group|all> <multiplier>         scale a light group live\n" +
+            "  light list                             groups, counts, current scale\n" +
             "Player:\n" +
-            "  goto <storefront|warehouse|spawn>\n" +
+            "  goto <storefront|warehouse|street|apartment|spawn>\n" +
             "  tp <x> <y> <z>\n" +
             "  speed <multiplier>                     1 = normal\n" +
             "  heal\n" +

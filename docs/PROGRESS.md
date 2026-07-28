@@ -354,6 +354,39 @@ legible. Rebuild wipes and regenerates `TestBuildings`.
 - **GraphicsQualityVolume** — global Volume (priority −10, so it never fights the runtime
   profile `WeatherManager` builds) carrying Screen Space Reflections + AO.
 
+### Adjustable lighting (`PracticalLight`)
+
+Every authored fixture carries a `PracticalLight`, which owns its intensity at runtime and
+solves two things:
+
+- **Night response.** A fixture tuned to read at noon is far too weak once the sun is down,
+  because exposure follows the day curve. `nightBoost` multiplies output at full night on
+  the same `SunController.DayBlend01` curve. Exteriors want 2-4; interiors that are on
+  regardless want ~1.1-1.3.
+- **Live tuning.** Lights join a named `group`, scaled from the console without leaving
+  play mode: `light warehouse 2`, `light list`. Broadcast to all clients.
+
+Groups currently: `neon`, `storefront`, `warehouse` (nightBoost 3.5 - the red work lights
+Evan wanted stronger after dark), `street` (3), `apartment` (1.15-1.3).
+
+Intensity must be written as range/cone → `lightUnit` → `intensity`. `PracticalLight` does
+this; anything else authoring HDRP lights must too (gotcha 19).
+
+### Street, apartment (`Game/Setup/Build Street`, `Build Apartment`)
+
+- **Street** at z = -35, 90m long: road, kerbs, pavements, dashed centre line, 6 sodium
+  lamps on alternating sides. Carries `SurfaceWetness`. Surfaces sit BELOW the 0.2m snow
+  depth on purpose (road 6cm, pavement 16cm) so snow covers them and footprints reveal
+  them again.
+- **Apartment** at (0, 0, 34): 3 storeys, warm interior practicals, emissive window bays
+  that read from outside, ground-floor entrance, and a working `ElevatorPlatform` in an
+  open shaft with a call button. Verified: cab 0.25m → 7.25m, player rode it grounded.
+
+Note asphalt albedo. The first pass used 0.06, which is close to black - the lamps lit
+almost nothing back and the street was unreadable at night. 0.13 is both more accurate and
+far more legible. The storefront forecourt keeps a darker `TB_Forecourt` because it is
+lit by neon at close range.
+
 Supporting runtime components:
 - `SurfaceWetness` — raises smoothness and darkens base colour as `WeatherManager.RainRate`
   climbs, dries off ~5× slower. Operates on material *instances*, so the `.mat` assets are
