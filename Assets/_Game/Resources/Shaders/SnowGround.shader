@@ -18,6 +18,7 @@ Shader "Game/SnowGround"
         _DepthMeters ("Max Depression (m)", Float) = 0.28
         _NormalStrength ("Normal Strength", Float) = 3.0
         _SmoothRadiusTexels ("Smoothing Radius (texels)", Range(1, 12)) = 5
+        _MinThickness ("Min Visible Thickness (m)", Float) = 0.012
     }
 
     SubShader
@@ -34,6 +35,10 @@ Shader "Game/SnowGround"
 
         TEXTURE2D(_SnowDeformRT);
         SAMPLER(sampler_SnowDeformRT);
+        // 1 = snow may lie here, 0 = blocked (building interiors, covered ground).
+        // Written by SnowDeformationManager from registered SnowBlocker footprints.
+        TEXTURE2D(_SnowMaskRT);
+        SAMPLER(sampler_SnowMaskRT);
 
         float4 _SnowRegionParams; // xy: region origin XZ, zw: 1/regionSize
         float4 _SnowColor;
@@ -45,6 +50,7 @@ Shader "Game/SnowGround"
         float _GameSunLux;
         float _SnowDeformTexel;
         float _SmoothRadiusTexels;
+        float _MinThickness;
         // Current snow depth in metres, driven by WeatherManager (accumulate / melt).
         float _SnowHeightMeters;
 
@@ -86,11 +92,21 @@ Shader "Game/SnowGround"
             float3 normalOS : NORMAL;
         };
 
+        // Mask is authored per-footprint, so bilinear edges are fine and cheap.
+        float SampleMask(float2 uv)
+        {
+            if (any(uv < 0.0) || any(uv > 1.0)) return 1.0;
+            return saturate(SAMPLE_TEXTURE2D_LOD(_SnowMaskRT, sampler_SnowMaskRT, uv, 0).r);
+        }
+
         struct Varyings
         {
             float4 positionCS : SV_POSITION;
             float3 positionWS : TEXCOORD0;
             float compression : TEXCOORD1;
+            // Snow actually left standing here, in metres. Drives the clip that exposes
+            // the street: where a footprint has carved through, this reaches zero.
+            float thickness : TEXCOORD2;
         };
 
         Varyings SnowVert(Attributes input)
@@ -103,18 +119,27 @@ Shader "Game/SnowGround"
             float3 positionRWS = TransformObjectToWorld(input.positionOS);
             float3 positionAWS = GetAbsolutePositionWS(positionRWS);
 
-            float compression = SampleDeformSmooth(WorldToDeformUV(positionAWS));
+            float2 deformUV = WorldToDeformUV(positionAWS);
+            float compression = SampleDeformSmooth(deformUV);
             // The mesh sits at ground level and RISES with the current snow depth, so snow
-            // grows in while it falls and sinks away as it melts. Trails can never carve
-            // deeper than the snow that is actually lying.
-            float snowHeight = _SnowHeightMeters;
-            float drop = compression * min(_DepthMeters, snowHeight);
-            float lift = snowHeight - drop;
+            // grows in while it falls and sinks away as it melts. The mask zeroes the depth
+            // wherever a SnowBlocker covers the ground (building interiors), so those areas
+            // stay flat at street level rather than sprouting snow through the floor.
+            float snowHeight = _SnowHeightMeters * SampleMask(deformUV);
+            // Carve depth is allowed to OVERSHOOT the lying depth, then the result is
+            // clamped at zero. Capping the drop at snowHeight instead would mean only a
+            // perfect compression of 1.0 could ever expose the road - and the tent filter
+            // that smooths the height field never produces 1.0, so trails always stopped
+            // just short. With _DepthMeters ~1.5x the snow depth, the core of a footprint
+            // reaches bare street while its edges still ramp out naturally.
+            float drop = compression * _DepthMeters;
+            float lift = max(snowHeight - drop, 0.0);
             positionRWS.y += lift;
             positionAWS.y += lift;
 
             o.positionWS = positionAWS;   // absolute - fragment re-samples with it
             o.compression = compression;
+            o.thickness = lift;
             o.positionCS = TransformWorldToHClip(positionRWS);
             return o;
         }
@@ -133,6 +158,12 @@ Shader "Game/SnowGround"
 
             float4 SnowFrag(Varyings input) : SV_Target
             {
+                // Nothing left lying here: drop the fragment so whatever is underneath -
+                // street, warehouse floor - is what you see. Also removes the snow plane
+                // entirely when coverage is zero, instead of leaving a white sheet over
+                // the ground. Must match the depth pass or depth and colour disagree.
+                clip(input.thickness - _MinThickness);
+
                 // Rebuild the surface normal from the deformation gradient so trail walls
                 // shade differently from flat snow. Step exactly one texel.
                 float2 uv = WorldToDeformUV(input.positionWS);
@@ -181,7 +212,11 @@ Shader "Game/SnowGround"
             HLSLPROGRAM
             #pragma vertex SnowVert
             #pragma fragment DepthFrag
-            float4 DepthFrag(Varyings input) : SV_Target { return 0; }
+            float4 DepthFrag(Varyings input) : SV_Target
+            {
+                clip(input.thickness - _MinThickness);
+                return 0;
+            }
             ENDHLSL
         }
     }

@@ -141,6 +141,12 @@ namespace Game.Editor
 
             ReflectionProbeAt("StorefrontProbe", root, new Vector3(0f, 2.5f, 4f),
                 new Vector3(26f, 10f, 26f));
+
+            // Keep snow off the shop floor and out from under the awning. Sized by hand
+            // rather than from renderer bounds: the bounds would include the forecourt
+            // slab, and the forecourt SHOULD collect snow.
+            AddSnowBlocker(root, "SnowBlock_Interior", new Vector3(0f, 0f, 0f), new Vector2(8f, 6f));
+            AddSnowBlocker(root, "SnowBlock_Awning", new Vector3(0f, 0f, 3.9f), new Vector2(8.4f, 1.9f));
         }
 
         // ---------------------------------------------------------------- warehouse
@@ -198,6 +204,22 @@ namespace Game.Editor
 
             ReflectionProbeAt("WarehouseProbe", root, new Vector3(0f, 3f, 0f),
                 new Vector3(20f, 14f, 16f));
+
+            // Whole footprint is roofed; the dock lip outside stays open to the weather.
+            AddSnowBlocker(root, "SnowBlock_Interior", new Vector3(0f, 0f, 0f), new Vector2(16f, 12f));
+        }
+
+        /// <summary>Marks ground that snow must not lie on. See <see cref="SnowBlocker"/>.</summary>
+        private static void AddSnowBlocker(Transform parent, string name, Vector3 localPos, Vector2 size)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = localPos;
+            var blocker = go.AddComponent<SnowBlocker>();
+            var so = new SerializedObject(blocker);
+            so.FindProperty("useRendererBounds").boolValue = false;
+            so.FindProperty("size").vector2Value = size;
+            so.ApplyModifiedPropertiesWithoutUndo();
         }
 
         // ---------------------------------------------------------------- quality volume

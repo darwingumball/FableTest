@@ -25,7 +25,8 @@ Material:
     m_TexEnvs: []
     m_Ints: []
     m_Floats:
-    - _DepthMeters: 0.35
+    - _DepthMeters: 0.3
+    - _MinThickness: 0.012
     - _NormalStrength: 3.5
     - _SmoothRadiusTexels: 5
     m_Colors:

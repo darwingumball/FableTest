@@ -262,9 +262,54 @@ its top face at `snowDepth − sinkDepth`. `sinkDepth` must equal the material's
 rests exactly at the bottom of the footprint it compresses. Verified: at 0.8 m coverage the
 player stands 0.27 m below the surface, grounded.
 
-**Known limitation:** the collider is one flat box over the whole region, so deep snow also
-raises the walkable surface *inside* buildings. Test buildings sit on a 0.2 m plinth, which
-only covers light snow. Per-surface snow collision is part of the city work (see above).
+### Street snow, snow masking, precipitation occlusion (2026-07-28)
+
+The base is a **street**, so snow is now shallow by design and three things follow.
+
+**1. Footprints carve to the road.** `maxSnowDepth` dropped 1.0m → **0.2m**, and the shader
+clips fragments below `_MinThickness` (0.012m) so bare road shows instead of a paper-thin
+snow sheet z-fighting the surface underneath.
+
+The carve math changed and the reason is subtle: it was `drop = compression *
+min(_DepthMeters, snowHeight)`, which caps the carve at exactly the lying depth — so only
+a *perfect* compression of 1.0 could reach zero, and the 9-tap tent filter that smooths the
+height field never produces 1.0. Trails always stopped a few centimetres short. Now the
+carve is allowed to **overshoot** and the result is clamped:
+`drop = compression * _DepthMeters; lift = max(snowHeight - drop, 0)`. With
+`TRAIL_DEPTH` (0.3m) at ~1.5x the snow depth, the core of a footprint hits bare street
+while its edges still ramp out. Measured: trail centre compression 0.90 → 0.000m
+thickness; untouched snow 0.200m.
+
+This also **dissolves the old collision problem**. `sinkDepth` = `TRAIL_DEPTH` >=
+`maxSnowDepth`, so the collider top sits at street level permanently — the player walks on
+the road with snow around their ankles, and deep snow can no longer flood interiors.
+Raising `maxSnowDepth` for a rural/deep region brings that trade-off back; keep
+`TRAIL_DEPTH >= maxSnowDepth` or trails stop short again.
+
+**2. Snow mask keeps snow out of buildings.** `SnowDeformationManager` owns a second R8 RT
+(`_SnowMaskRT`, 1 = snow allowed) painted from every active `SnowBlocker` footprint via
+`SnowDeform.shader` pass 2 (min blend, feathered edge). The snow shader multiplies its
+depth by the mask, so blocked ground stays flat at street level.
+
+`SnowBlocker` takes its axis-aligned XZ footprint from renderer bounds or a hand-set size,
+with an `inset` so exterior walls still catch snow against them. Repaint is triggered by
+`MarkMaskDirty()` on enable/disable and runs in `LateUpdate`, so a whole streamed district
+registers before the mask is painted. Verified: mask = 0 inside both test buildings, 1 on
+the street and on the storefront forecourt (which *should* collect snow).
+
+**Limitation:** footprints are axis-aligned rectangles. Rotated buildings will over-mask at
+the corners — needs a rotated-rect or per-mesh stamp when the city has non-grid geometry.
+
+**3. Rain/snow no longer falls through roofs.** Two mechanisms, because neither is enough
+alone: `PrecipitationController` enables particle **world collision** (Medium quality,
+`lifetimeLoss = 1` so drops die on contact) which stops precipitation at a roof edge; and
+an **overhead raycast** from the player fades emission out under cover, because the emitter
+box sits 14m up and would otherwise spawn a full downpour indoors just to kill it instantly
+on the ceiling. Collision quality is deliberately Medium — High is one raycast per particle
+per frame, which at these counts is not affordable.
+
+**Old known limitation, now resolved:** the flat snow collider used to raise the walkable
+surface inside buildings under deep snow. Street-depth snow plus the mask removes it.
 
 ### Spawn placement (fixed 2026-07-28)
 

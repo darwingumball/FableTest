@@ -23,14 +23,23 @@ namespace Game.World
         [Tooltip("Deformation texture resolution. 2048 over 100m = ~5cm per texel.")]
         [SerializeField] private int resolution = 2048;
 
+        [Tooltip("Softening across snow-mask edges, in metres.")]
+        [SerializeField] private float maskFeather = 0.35f;
+
         public RenderTexture DeformRT { get; private set; }
+        /// <summary>1 = snow may lie here, 0 = blocked by a <see cref="SnowBlocker"/>.</summary>
+        public RenderTexture MaskRT { get; private set; }
 
         private Material _opsMaterial;
         private readonly List<SnowDeformer> _deformers = new();
+        private bool _maskDirty = true;
 
         private static readonly int StampDataId = Shader.PropertyToID("_StampData");
         private static readonly int RefillId = Shader.PropertyToID("_RefillAmount");
+        private static readonly int BlockRectId = Shader.PropertyToID("_BlockRect");
+        private static readonly int BlockFeatherId = Shader.PropertyToID("_BlockFeather");
         private static readonly int GlobalRtId = Shader.PropertyToID("_SnowDeformRT");
+        private static readonly int GlobalMaskId = Shader.PropertyToID("_SnowMaskRT");
         private static readonly int GlobalParamsId = Shader.PropertyToID("_SnowRegionParams");
         private static readonly int GlobalTexelId = Shader.PropertyToID("_SnowDeformTexel");
 
@@ -56,10 +65,23 @@ namespace Game.World
             GL.Clear(false, true, Color.clear);
             RenderTexture.active = prev;
 
+            // Mask starts fully white: snow everywhere until a blocker carves it out.
+            MaskRT = new RenderTexture(resolution, resolution, 0, RenderTextureFormat.R8)
+            {
+                name = "SnowMaskRT",
+                wrapMode = TextureWrapMode.Clamp,
+                filterMode = FilterMode.Bilinear,
+            };
+            MaskRT.Create();
+            RenderTexture.active = MaskRT;
+            GL.Clear(false, true, Color.white);
+            RenderTexture.active = prev;
+
             var shader = Resources.Load<Shader>("Shaders/SnowDeform");
             _opsMaterial = new Material(shader);
 
             Shader.SetGlobalTexture(GlobalRtId, DeformRT);
+            Shader.SetGlobalTexture(GlobalMaskId, MaskRT);
             UpdateRegionGlobals();
         }
 
@@ -67,11 +89,47 @@ namespace Game.World
         {
             if (Instance == this) Instance = null;
             if (DeformRT != null) DeformRT.Release();
+            if (MaskRT != null) MaskRT.Release();
         }
+
+        /// <summary>Request a mask rebuild. Blockers call this when they enable/disable.</summary>
+        public void MarkMaskDirty() => _maskDirty = true;
+
+        /// <summary>
+        /// Repaints the mask from every active blocker. Cheap enough to do wholesale
+        /// because it only runs when the set of blockers changes, not per frame.
+        /// </summary>
+        private void RebuildMask()
+        {
+            _maskDirty = false;
+            if (_opsMaterial == null || MaskRT == null) return;
+
+            var prev = RenderTexture.active;
+            RenderTexture.active = MaskRT;
+            GL.Clear(false, true, Color.white);
+            RenderTexture.active = prev;
+
+            Vector3 origin = RegionOrigin();
+            _opsMaterial.SetFloat(BlockFeatherId, maskFeather / regionSize);
+
+            foreach (var blocker in FindObjectsByType<SnowBlocker>(FindObjectsSortMode.None))
+            {
+                if (!blocker.isActiveAndEnabled) continue;
+                Vector4 f = blocker.GetFootprint();
+                var min = new Vector2((f.x - origin.x) / regionSize, (f.y - origin.z) / regionSize);
+                var max = new Vector2((f.z - origin.x) / regionSize, (f.w - origin.z) / regionSize);
+                if (max.x < 0f || max.y < 0f || min.x > 1f || min.y > 1f) continue; // outside region
+                _opsMaterial.SetVector(BlockRectId, new Vector4(min.x, min.y, max.x, max.y));
+                Graphics.Blit(null, MaskRT, _opsMaterial, 2);
+            }
+        }
+
+        private Vector3 RegionOrigin() =>
+            transform.position - new Vector3(regionSize, 0f, regionSize) * 0.5f;
 
         private void UpdateRegionGlobals()
         {
-            Vector3 origin = transform.position - new Vector3(regionSize, 0f, regionSize) * 0.5f;
+            Vector3 origin = RegionOrigin();
             Shader.SetGlobalVector(GlobalParamsId,
                 new Vector4(origin.x, origin.z, 1f / regionSize, 1f / regionSize));
             // One texel in UV. Normal reconstruction MUST step by this, not by
@@ -89,6 +147,9 @@ namespace Game.World
         private void LateUpdate()
         {
             if (_opsMaterial == null) return;
+            // Deferred to LateUpdate so blockers spawned this frame (scene load, streamed
+            // district) are all registered before the mask is painted.
+            if (_maskDirty) RebuildMask();
 
             foreach (var deformer in _deformers)
             {

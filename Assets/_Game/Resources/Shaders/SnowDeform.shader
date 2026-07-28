@@ -27,6 +27,8 @@ Shader "Hidden/Game/SnowDeform"
 
         float4 _StampData;   // xy: stamp center (region UV), z: radius (UV), w: depth 0..1
         float _RefillAmount; // depth removed this frame
+        float4 _BlockRect;   // xy: min UV, zw: max UV of a SnowBlocker footprint
+        float _BlockFeather; // softening width in UV, so mask edges are not a hard step
         ENDCG
 
         Pass // 0: stamp (max blend)
@@ -57,6 +59,26 @@ Shader "Hidden/Game/SnowDeform"
             float4 fragRefill(v2f i) : SV_Target
             {
                 return float4(_RefillAmount, 0, 0, 1);
+            }
+            ENDCG
+        }
+
+        Pass // 2: snow mask - carve a blocker footprint out (min blend, 1 = snow allowed)
+        {
+            BlendOp Min
+            Blend One One
+            CGPROGRAM
+            #pragma vertex vert
+            #pragma fragment fragBlock
+            float4 fragBlock(v2f i) : SV_Target
+            {
+                // Distance INTO the rect on each axis; negative outside.
+                float2 inside = min(i.uv - _BlockRect.xy, _BlockRect.zw - i.uv);
+                float d = min(inside.x, inside.y);
+                // 1 outside the footprint, 0 well inside, feathered across the edge so the
+                // snow ramps down to the wall instead of ending on a hard texel step.
+                float mask = 1.0 - smoothstep(0.0, max(_BlockFeather, 1e-5), d);
+                return float4(mask, 0, 0, 1);
             }
             ENDCG
         }

@@ -30,7 +30,13 @@ namespace Game.Editor
         // BOTH the material (_DepthMeters, the visual dent) and SnowSurfaceCollider
         // (sinkDepth, how far a body drops below the surface). If they disagree the player
         // either hovers over their own footprints or wades below them.
-        private const float TRAIL_DEPTH = 0.35f;
+        //
+        // Deliberately >= WeatherManager.maxSnowDepth (street depth, ~0.2m): a full stamp
+        // then carves the whole way down, the shader clips the zero-thickness fragments,
+        // and the street shows through the trail. It also means the collider top sits at
+        // street level, so the player walks on the road and the snow is around their
+        // ankles - which is why deep snow no longer floods building interiors.
+        private const float TRAIL_DEPTH = 0.3f;
 
         [MenuItem("Game/Setup/Build Snow Ground")]
         public static void Build()
@@ -120,6 +126,8 @@ namespace Game.Editor
             // never gets carved through to the ground beneath.
             mat.SetFloat("_DepthMeters", TRAIL_DEPTH);
             mat.SetFloat("_NormalStrength", 3.5f);
+            // Below this remaining thickness the fragment is clipped and the street shows.
+            mat.SetFloat("_MinThickness", 0.012f);
             // Higher = softer, more sculpted prints; lower = sharper but more faceted.
             mat.SetFloat("_SmoothRadiusTexels", 5f);
             EditorUtility.SetDirty(mat);

@@ -10,8 +10,22 @@ namespace Game.World
     /// </summary>
     public class PrecipitationController : MonoBehaviour
     {
+        [Header("Occlusion")]
+        [Tooltip("Kill particles on contact with world geometry so rain stops at roofs " +
+                 "instead of falling through them.")]
+        [SerializeField] private bool collideWithWorld = true;
+        [Tooltip("Approximate collision budget. High quality would mean one raycast per " +
+                 "particle per frame, which is far too expensive at these counts.")]
+        [SerializeField] private int maxCollisionShapes = 128;
+        [Tooltip("How far above the player to look for a roof before cutting emission.")]
+        [SerializeField] private float coverProbeDistance = 40f;
+        [Tooltip("Seconds-ish to fade precipitation in/out when moving under cover.")]
+        [SerializeField] private float coverFadeSpeed = 3f;
+
         private ParticleSystem _rain;
         private ParticleSystem _snow;
+        // 0 = open sky, 1 = fully roofed.
+        private float _coverBlend;
 
         private void Start()
         {
@@ -33,9 +47,26 @@ namespace Game.World
                 transform.position = new Vector3(p.x, p.y + 14f, p.z);
             }
 
+            // Particle collision stops drops at a roof edge, but the emitter box sits 14m
+            // up - well above most interiors - so standing inside would still spawn a full
+            // downpour that dies instantly on the ceiling. Cutting emission under cover
+            // avoids paying for particles nobody can see.
+            float target = player != null && IsUnderCover(player.transform.position) ? 1f : 0f;
+            _coverBlend = Mathf.MoveTowards(_coverBlend, target, coverFadeSpeed * Time.deltaTime);
+            float openSky = 1f - _coverBlend;
+
             var weather = WeatherManager.Instance;
-            SetRate(_rain, weather != null ? weather.RainRate : 0f);
-            SetRate(_snow, weather != null ? weather.SnowRate : 0f);
+            SetRate(_rain, (weather != null ? weather.RainRate : 0f) * openSky);
+            SetRate(_snow, (weather != null ? weather.SnowRate : 0f) * openSky);
+        }
+
+        private bool IsUnderCover(Vector3 playerPosition)
+        {
+            // Start above head height: a ray beginning inside the player's own capsule is
+            // not reliably reported as a hit, and we would rather not depend on that.
+            Vector3 origin = playerPosition + Vector3.up * 2.1f;
+            return Physics.Raycast(origin, Vector3.up, coverProbeDistance,
+                ~0, QueryTriggerInteraction.Ignore);
         }
 
         private static void SetRate(ParticleSystem ps, float rate)
@@ -71,6 +102,19 @@ namespace Game.World
 
             var emission = ps.emission;
             emission.rateOverTime = 0f;
+
+            var collision = ps.collision;
+            collision.enabled = collideWithWorld;
+            collision.type = ParticleSystemCollisionType.World;
+            collision.mode = ParticleSystemCollisionMode.Collision3D;
+            // Medium quality collides against a cached shape set rather than raycasting
+            // every particle; the budget below is what bounds the cost.
+            collision.quality = ParticleSystemCollisionQuality.Medium;
+            collision.maxCollisionShapes = maxCollisionShapes;
+            collision.lifetimeLoss = 1f;   // die on contact - no bouncing raindrops
+            collision.dampen = 1f;
+            collision.bounce = 0f;
+            collision.radiusScale = 0.5f;
 
             var renderer = ps.GetComponent<ParticleSystemRenderer>();
             renderer.renderMode = stretch > 0f

@@ -72,8 +72,11 @@ namespace Game.Net
         [SerializeField] private float cloudExposureCompensation = 1.3f;
 
         [Header("Snow depth (accumulates while snowing, melts in sun)")]
-        [Tooltip("Snow depth in metres at full coverage. ~1m is waist-deep.")]
-        [SerializeField] private float maxSnowDepth = 1.0f;
+        [Tooltip("Snow depth in metres at full coverage. Tuned for STREETS: shallow enough " +
+                 "that a footprint carves through to the road and the player walks on the " +
+                 "road surface, not on top of the snow. Raise for open/rural regions - but " +
+                 "keep SnowGroundBuilder.TRAIL_DEPTH >= this or trails stop short.")]
+        [SerializeField] private float maxSnowDepth = 0.2f;
         [Tooltip("Coverage gained per second at full snowfall (1 = empty to full).")]
         [SerializeField] private float snowGainPerSecond = 0.004f;
         [Tooltip("Coverage lost per second in full sun with no snowfall.")]
