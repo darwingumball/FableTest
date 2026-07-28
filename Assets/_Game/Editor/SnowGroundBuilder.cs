@@ -1,4 +1,5 @@
 using System.IO;
+using Game.World;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -24,6 +25,12 @@ namespace Game.Editor
         private const int SEGMENTS = 600;
         // Snow depth is no longer a constant here - it is driven at runtime by
         // WeatherManager (maxSnowDepth * coverage). See _SnowHeightMeters in the shader.
+
+        // How deep a full-strength stamp presses into lying snow. This single number feeds
+        // BOTH the material (_DepthMeters, the visual dent) and SnowSurfaceCollider
+        // (sinkDepth, how far a body drops below the surface). If they disagree the player
+        // either hovers over their own footprints or wades below them.
+        private const float TRAIL_DEPTH = 0.35f;
 
         [MenuItem("Game/Setup/Build Snow Ground")]
         public static void Build()
@@ -109,10 +116,9 @@ namespace Game.Editor
             mat.shader = shader;
             mat.SetColor("_SnowColor", new Color(0.90f, 0.92f, 0.96f));
             mat.SetColor("_PackedColor", new Color(0.60f, 0.64f, 0.72f));
-            // Depth a full-strength stamp sinks. Keep below SNOW_THICKNESS so trails
-            // never break through to the ground beneath - here it carves almost to the
-            // bottom, leaving a shallow crust.
-            mat.SetFloat("_DepthMeters", 0.85f);
+            // The shader also clamps this to the current snow height, so shallow snow
+            // never gets carved through to the ground beneath.
+            mat.SetFloat("_DepthMeters", TRAIL_DEPTH);
             mat.SetFloat("_NormalStrength", 3.5f);
             // Higher = softer, more sculpted prints; lower = sharper but more faceted.
             mat.SetFloat("_SmoothRadiusTexels", 5f);
@@ -145,8 +151,22 @@ namespace Game.Editor
             // Displacement happens in the vertex shader, so the CPU bounds must stay valid.
             renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
 
-            var collider = go.GetComponent<MeshCollider>();
-            if (collider != null) Object.DestroyImmediate(collider);
+            // A MeshCollider would describe the flat, undisplaced plane - the displacement
+            // only exists in the vertex shader - so the player would walk at y=0 while the
+            // snow rendered above their head. SnowSurfaceCollider drives a box whose top
+            // face tracks the live snow depth instead.
+            var meshCollider = go.GetComponent<MeshCollider>();
+            if (meshCollider != null) Object.DestroyImmediate(meshCollider);
+
+            if (!go.TryGetComponent<BoxCollider>(out var box)) box = go.AddComponent<BoxCollider>();
+            if (!go.TryGetComponent<SnowSurfaceCollider>(out var surface))
+                surface = go.AddComponent<SnowSurfaceCollider>();
+            var so = new SerializedObject(surface);
+            so.FindProperty("regionSize").floatValue = SIZE;
+            so.FindProperty("sinkDepth").floatValue = TRAIL_DEPTH;
+            so.ApplyModifiedPropertiesWithoutUndo();
+            box.size = new Vector3(SIZE, 6f, SIZE);
+            box.center = new Vector3(0f, -3f, 0f);
 
             EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene, WORLD_SCENE);

@@ -18,16 +18,16 @@ MonoBehaviour:
     m_Value: 1
   redLevels:
     m_OverrideState: 1
-    m_Value: 63
+    m_Value: 95
   greenLevels:
     m_OverrideState: 1
-    m_Value: 127
+    m_Value: 191
   blueLevels:
     m_OverrideState: 1
-    m_Value: 63
+    m_Value: 95
   dither:
     m_OverrideState: 1
-    m_Value: 0.5
+    m_Value: 0
 --- !u!114 &-7724654706381055090
 MonoBehaviour:
   m_ObjectHideFlags: 3

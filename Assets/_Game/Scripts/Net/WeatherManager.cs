@@ -86,6 +86,13 @@ namespace Game.Net
         /// <summary>0..1 how covered the world currently is.</summary>
         public float SnowCoverage => _snowCoverage.Value;
 
+        /// <summary>
+        /// Current depth of lying snow in metres. The snow shader lifts its mesh by this,
+        /// and <see cref="Game.World.SnowSurfaceCollider"/> raises collision to match, so
+        /// they must read the same number.
+        /// </summary>
+        public float SnowDepthMeters => _snowCoverage.Value * maxSnowDepth;
+
         private Fog _fog;
         private VolumetricClouds _clouds;
         private Exposure _exposure;
@@ -243,7 +250,7 @@ namespace Game.Net
                     _snowCoverage.Value = next;
             }
 
-            Shader.SetGlobalFloat(SnowHeightId, _snowCoverage.Value * maxSnowDepth);
+            Shader.SetGlobalFloat(SnowHeightId, SnowDepthMeters);
         }
 
         private static bool cloudsOn(VolumetricClouds c) => c != null && c.enable.value;

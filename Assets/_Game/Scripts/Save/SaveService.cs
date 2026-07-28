@@ -268,7 +268,9 @@ namespace Game.Save
 
             var cc = local.GetComponent<CharacterController>();
             if (cc != null) cc.enabled = false;
-            local.transform.position = position;
+            // Snow depth at save time is not snow depth at load time, so the stored Y can
+            // land inside the snow volume. Re-seat on the surface that exists now.
+            local.transform.position = GroundProbe.ResolveStandingPosition(position);
             if (cc != null) cc.enabled = true;
         }
     }

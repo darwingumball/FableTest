@@ -77,18 +77,32 @@ namespace Game.Editor
                 Debug.LogError($"[PSXSetup] Volume profile not found at {PROFILE_PATH}.");
                 return;
             }
-            if (profile.Has<PSXPostProcess>())
+            // Values already serialized in the profile do NOT pick up changed C# defaults,
+            // so re-running this must push the current defaults onto an existing override
+            // rather than bailing out.
+            bool existed = profile.TryGet<PSXPostProcess>(out var component);
+            if (!existed)
             {
-                Debug.Log("[PSXSetup] Profile already has PSX override.");
-                return;
+                component = profile.Add<PSXPostProcess>(overrides: true);
+                component.name = "PSXPostProcess";
             }
 
-            var component = profile.Add<PSXPostProcess>(overrides: true);
+            var defaults = ScriptableObject.CreateInstance<PSXPostProcess>();
             component.enabledEffect.overrideState = true;
             component.enabledEffect.value = true;
-            component.name = "PSXPostProcess";
-            AssetDatabase.AddObjectToAsset(component, profile);
+            component.redLevels.value = defaults.redLevels.value;
+            component.greenLevels.value = defaults.greenLevels.value;
+            component.blueLevels.value = defaults.blueLevels.value;
+            component.dither.value = defaults.dither.value;
+            Object.DestroyImmediate(defaults);
+
+            if (!existed) AssetDatabase.AddObjectToAsset(component, profile);
+            EditorUtility.SetDirty(component);
             EditorUtility.SetDirty(profile);
+            AssetDatabase.SaveAssets();
+            Debug.Log($"[PSXSetup] PSX override {(existed ? "updated" : "added")}: " +
+                      $"levels {component.redLevels.value}/{component.greenLevels.value}/" +
+                      $"{component.blueLevels.value}, dither {component.dither.value}.");
         }
     }
 }

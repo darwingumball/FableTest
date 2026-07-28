@@ -35,20 +35,35 @@ Shader "Hidden/Game/PSXPost"
     float4 _PSXParams;       // x,y,z: color levels per channel, w: dither strength
     float4 _PSXLowResSize;   // xy: size, zw: 1/size
 
-    // Ordered 4x4 Bayer matrix, normalized to [0,1).
-    static const float BAYER4[16] =
+    // Interleaved gradient noise, static (no time term - PSX dither never crawled).
+    //
+    // This replaced a 4x4 ordered Bayer matrix. Bayer tiles into a hard crosshatch that
+    // is extremely visible across smooth gradients - sky, fog, dark interiors - and was
+    // the most fatiguing part of the whole effect to look at. IGN breaks up the
+    // regularity while still being a fixed per-pixel pattern, so it reads as period-
+    // correct dither instead of film grain.
+    float DitherNoise(uint2 pixel)
     {
-         0.0 / 16.0,  8.0 / 16.0,  2.0 / 16.0, 10.0 / 16.0,
-        12.0 / 16.0,  4.0 / 16.0, 14.0 / 16.0,  6.0 / 16.0,
-         3.0 / 16.0, 11.0 / 16.0,  1.0 / 16.0,  9.0 / 16.0,
-        15.0 / 16.0,  7.0 / 16.0, 13.0 / 16.0,  5.0 / 16.0
-    };
+        const float3 magic = float3(0.06711056, 0.00583715, 52.9829189);
+        return frac(magic.z * frac(dot(float2(pixel), magic.xy)));
+    }
 
     float3 QuantizeDither(float3 c, uint2 pixel)
     {
-        float d = (BAYER4[(pixel.y & 3) * 4 + (pixel.x & 3)] - 0.5) * _PSXParams.w;
+        // Triangular PDF (difference of two offset samples). Uniform noise leaves a harsh
+        // one-sided speckle; TPDF cancels banding far more evenly for the same amplitude.
+        float n = DitherNoise(pixel) - DitherNoise(pixel + uint2(17, 13));
+        float d = n * _PSXParams.w;
         float3 levels = _PSXParams.xyz;
-        return floor(saturate(c) * levels + 0.5 + d) / levels;
+
+        // Quantize in a perceptual (sqrt) space, not linearly. This buffer is post-tonemap
+        // but still linear, and the game is mostly dark: a linear step of 1/95 is a ~13%
+        // jump on a 0.08 pixel, which is why contour rings appear in every dark falloff
+        // even at 255 levels. sqrt spends the available levels where the eye actually
+        // resolves them, so the banding disappears without needing dither to hide it.
+        float3 perceptual = sqrt(saturate(c));
+        float3 quantized = floor(perceptual * levels + 0.5 + d) / levels;
+        return quantized * quantized;
     }
 
     // Pass 0: point-downsample full-res source into the low-res RT.

@@ -21,14 +21,17 @@ namespace Game.Rendering
         [Tooltip("Master switch for the PSX stack.")]
         public BoolParameter enabledEffect = new(false);
 
-        [Tooltip("Color levels per channel. 63/127/63 keeps neon/emissive gradients smooth " +
-                 "while still crushing subtly; drop toward 31/63/31 for harsher retro banding.")]
-        public ClampedIntParameter redLevels = new(63, 2, 255);
-        public ClampedIntParameter greenLevels = new(127, 2, 255);
-        public ClampedIntParameter blueLevels = new(63, 2, 255);
+        [Tooltip("Color levels per channel, applied in perceptual (sqrt) space. 95/191/95 " +
+                 "crushes colour noticeably without banding; drop toward 31/63/31 for " +
+                 "harsher retro banding.")]
+        public ClampedIntParameter redLevels = new(95, 2, 255);
+        public ClampedIntParameter greenLevels = new(191, 2, 255);
+        public ClampedIntParameter blueLevels = new(95, 2, 255);
 
-        [Tooltip("Base dither amount; multiplied by the user's dither setting.")]
-        public ClampedFloatParameter dither = new(0.5f, 0f, 2f);
+        [Tooltip("Base dither amount, multiplied by the user's dither setting. Defaults to " +
+                 "OFF - quantizing perceptually removes the banding dither used to hide, so " +
+                 "the grain is no longer needed. Raise for a deliberately noisier retro look.")]
+        public ClampedFloatParameter dither = new(0f, 0f, 2f);
 
         public override CustomPostProcessInjectionPoint injectionPoint =>
             CustomPostProcessInjectionPoint.AfterPostProcess;

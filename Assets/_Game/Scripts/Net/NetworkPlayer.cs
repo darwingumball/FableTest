@@ -42,6 +42,13 @@ namespace Game.Net
             NetworkVariableWritePermission.Owner);
 
         private float _nextPitchSend;
+        private bool _placed;
+        private float _placeDeadline;
+
+        [Header("Spawn placement")]
+        [Tooltip("How long to wait for the gameplay scene's spawn point before giving up " +
+                 "and handing control over wherever the player currently is.")]
+        [SerializeField] private float spawnPointWaitTimeout = 10f;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         private static void ResetStatics()
@@ -59,7 +66,9 @@ namespace Game.Net
         {
             bool owner = IsOwner;
 
-            if (firstPersonController != null) firstPersonController.enabled = owner;
+            // The owner's controller stays off until the player has been placed - see
+            // TryPlaceAtSpawn. Remote copies never run it at all.
+            if (firstPersonController != null) firstPersonController.enabled = false;
             if (interactionSystem != null) interactionSystem.enabled = owner;
             if (playerCamera != null) playerCamera.gameObject.SetActive(owner);
             if (audioListener != null) audioListener.enabled = owner;
@@ -68,7 +77,8 @@ namespace Game.Net
             {
                 Local = this;
                 SuppressOtherAudioListeners();
-                MoveToSpawnPoint();
+                _placeDeadline = Time.time + spawnPointWaitTimeout;
+                TryPlaceAtSpawn();
                 OnLocalPlayerReady?.Invoke(this);
             }
 
@@ -94,21 +104,56 @@ namespace Game.Net
             }
         }
 
-        private void MoveToSpawnPoint()
+        /// <summary>
+        /// Places the owner on the gameplay scene's spawn point, retrying until it exists.
+        ///
+        /// NGO spawns the player object as soon as the connection is approved, which on the
+        /// host is before NetworkSceneManager has finished loading the gameplay scene. At
+        /// that moment there is no spawn point and no ground at all, so a one-shot attempt
+        /// silently does nothing and the player free-falls through an empty scene. Movement
+        /// is held off until placement succeeds so gravity can't run in the meantime.
+        /// </summary>
+        private void TryPlaceAtSpawn()
         {
-            if (!PlayerSpawnPoint.TryGetSpawnPose(out var pos, out var rot)) return;
-            // CharacterController fights teleports; disable around the warp.
+            if (_placed) return;
+
+            if (!PlayerSpawnPoint.TryGetSpawnPose(out var pos, out var rot))
+            {
+                // Scene still loading. Give up eventually rather than freezing forever.
+                if (Time.time >= _placeDeadline)
+                {
+                    Debug.LogWarning("[NetworkPlayer] No PlayerSpawnPoint found; " +
+                                     "releasing control at the current position.", this);
+                    Release();
+                }
+                return;
+            }
+
+            // CharacterController fights teleports; disable around the warp. Disabling it
+            // first also keeps our own capsule out of the ground probe below.
             var cc = GetComponent<CharacterController>();
             if (cc != null) cc.enabled = false;
-            transform.SetPositionAndRotation(pos, rot);
+            // The authored spawn Y assumes bare ground. Lying snow raises the walkable
+            // surface above it, so drop onto whatever is actually on top instead.
+            transform.SetPositionAndRotation(GroundProbe.ResolveStandingPosition(pos), rot);
             if (cc != null) cc.enabled = true;
-            if (firstPersonController != null) firstPersonController.SyncRotationFromTransform();
+            Release();
+        }
+
+        private void Release()
+        {
+            _placed = true;
+            if (firstPersonController == null) return;
+            firstPersonController.enabled = true;
+            firstPersonController.SyncRotationFromTransform();
         }
 
         private void Update()
         {
             if (IsOwner)
             {
+                if (!_placed) TryPlaceAtSpawn();
+
                 if (firstPersonController != null && Time.time >= _nextPitchSend)
                 {
                     _nextPitchSend = Time.time + pitchReplicateInterval;

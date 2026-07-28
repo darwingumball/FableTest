@@ -201,6 +201,105 @@ MapCamera — prefabs cannot store scene references, so that link lives on the i
     pitch/roll already on the body (from spawn placement or teleports) and shows up as
     camera roll/tilt while moving. Call `SyncRotationFromTransform()` after any external
     reposition.
+19. **HDRP re-derives light intensity when the emitting shape changes, so ordering
+    matters.** `hd.SetIntensity(lm, LightUnit.Lumen)` followed by `hd.SetSpotAngle(a)`
+    applies the lumen→candela conversion a SECOND time; point lights authored at 9000 lm
+    came out at 57 lm (a factor of 16π²). Set `range` and `SetSpotAngle` FIRST, then
+    `hd.lightUnit = LightUnit.Lumen`, then `hd.intensity = lumens`. That order round-trips
+    exactly. See `TestBuildingsBuilder.MakeLight`.
+20. **`LightUnit` lives in `UnityEngine.Rendering`, not `.HighDefinition`.**
+21. **`ScreenSpaceReflection.minSmoothness` / `.smoothnessFadeStart` are plain floats
+    backed by the quality preset, not `VolumeParameter`s.** Setting the value alone does
+    nothing — the getter ignores it unless the quality level is flagged as an override:
+    `ssr.quality.levelAndOverride = ((int)Level.High, true)`. Use
+    `profile.Add<T>(overrides: true)` so every parameter's `overrideState` is on.
+22. **Metallic ≈ 1 leaves almost no diffuse response and reads as pure black** under
+    practical (non-IBL) lighting. The warehouse walls at 0.75 metallic were invisible at
+    night; 0.25 fixed it. Reserve high metallic for surfaces that have a reflection probe
+    worth reflecting.
+23. **Emissive surfaces are not lights.** A 2600-nit neon sign is ~1000× brighter than
+    what a 9000 lm bulb puts on a 0.3-albedo wall, so signage blows out while the building
+    stays black. Pair every emissive prop with a real light carrying its colour, and give
+    it `affectsVolumetric = true` + a `volumetricDimmer` above 1 or the glow stops at the
+    surfaces it hits instead of hazing through fog.
+
+### Dithering removed (2026-07-28) — Evan asked for this twice, do not reintroduce it
+
+The PSX pass originally used a **4x4 ordered Bayer matrix**, which tiles into a hard
+crosshatch that is extremely visible on smooth gradients and was genuinely tiring to look
+at. Two things were wrong and both had to be fixed:
+
+1. **The pattern.** Bayer → interleaved gradient noise with a triangular PDF. Static (PSX
+   dither never crawled), but unstructured, so it reads as fine grain rather than a grid.
+2. **The banding underneath.** Dropping dither amplitude exposed contour rings in every
+   dark falloff. This was NOT output precision — it survived at 255 levels, with HDRP's
+   camera `dithering` on, and with volumetric fog off. The cause is that the pass
+   quantized **linearly** on a post-tonemap-but-still-linear buffer in a very dark game:
+   a 1/95 linear step is a ~13% jump on a 0.08 pixel. Quantizing in **perceptual (sqrt)
+   space** and squaring back spends the levels where the eye resolves them and the banding
+   disappears entirely.
+
+Result: `dither = 0` by default, levels 95/191/95, and the image has **neither grain nor
+banding**. The PSX character now comes from internal resolution, vertex snap and affine
+warp — not from noise. `dither` is still exposed if a deliberately noisier look is ever
+wanted; because it now dithers in perceptual space it stays useful at low amplitudes.
+
+`PSXSetup.AddToWorldProfile` re-pushes the current C# defaults onto the existing override
+instead of bailing when one exists — values already serialized in a VolumeProfile do NOT
+pick up changed defaults, so re-run `Game/Setup/Register PSX Post Process` after editing
+them.
+
+### Snow collision (fixed 2026-07-28)
+
+The snow mesh is displaced entirely in the **vertex shader**, so a MeshCollider only ever
+describes the flat undisplaced plane. With `maxSnowDepth = 1m` the visible surface sat a
+metre above the physics ground: the player spawned *inside* the snow volume looking at
+backfaces, which reads exactly like falling through the floor.
+
+`SnowSurfaceCollider` (on `SnowGround`) now drives a BoxCollider spanning the region with
+its top face at `snowDepth − sinkDepth`. `sinkDepth` must equal the material's
+`_DepthMeters` — both are written from `SnowGroundBuilder.TRAIL_DEPTH` (0.35) — so a body
+rests exactly at the bottom of the footprint it compresses. Verified: at 0.8 m coverage the
+player stands 0.27 m below the surface, grounded.
+
+**Known limitation:** the collider is one flat box over the whole region, so deep snow also
+raises the walkable surface *inside* buildings. Test buildings sit on a 0.2 m plinth, which
+only covers light snow. Per-surface snow collision is part of the city work (see above).
+
+### Spawn placement (fixed 2026-07-28)
+
+NGO spawns the player object at connection approval, which on the host is **before**
+NetworkSceneManager finishes loading the gameplay scene — so `PlayerSpawnPoint` doesn't
+exist yet, there is no ground at all, and a one-shot placement attempt silently no-ops
+while the player free-falls. `NetworkPlayer` now keeps `FirstPersonController` disabled
+(no gravity) and retries `TryPlaceAtSpawn()` every frame until the spawn point appears,
+with a `spawnPointWaitTimeout` fallback. Placement also runs through `GroundProbe`, which
+drops the authored/saved Y onto whatever surface is actually on top — this is what makes
+both spawn and save-restore snow-depth-agnostic.
+
+## Graphics testbed (`Game/Setup/Build Test Buildings`)
+
+Two lighting testbeds in World, built entirely from box primitives so the numbers stay
+legible. Rebuild wipes and regenerates `TestBuildings`.
+
+- **Storefront** at `(-26, 0, 18)` — neon pink/blue signage, lit interior visible through
+  the window, dark asphalt forecourt for reflections.
+- **Warehouse** at `(26, 0, -20)` — red ceiling strips + shadow-casting work lights that
+  throw volumetric beams, one cold blue leak at the back for contrast.
+- **GraphicsQualityVolume** — global Volume (priority −10, so it never fights the runtime
+  profile `WeatherManager` builds) carrying Screen Space Reflections + AO.
+
+Supporting runtime components:
+- `SurfaceWetness` — raises smoothness and darkens base colour as `WeatherManager.RainRate`
+  climbs, dries off ~5× slower. Operates on material *instances*, so the `.mat` assets are
+  never dirtied. Publishes `_GameWetness` globally. **Note:** because renderers use
+  instances at runtime, editing the shared material in play mode has no visible effect —
+  tune through the renderer's `.material` or re-run the builder.
+- `PeriodicReflectionProbe` — realtime probes refresh on an 8 s stagger; capturing once at
+  startup goes stale as the sun moves and neon takes over at night.
+
+Tuning notes from the first pass: point lights land in the 8k–30k lm range, spots 50k–70k;
+neon emissive at 2600 nits, dim strips at 900.
 
 ## Trust model
 
