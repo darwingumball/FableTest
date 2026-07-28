@@ -277,6 +277,26 @@ with a `spawnPointWaitTimeout` fallback. Placement also runs through `GroundProb
 drops the authored/saved Y onto whatever surface is actually on top — this is what makes
 both spawn and save-restore snow-depth-agnostic.
 
+## Admin console
+
+Backquote (`` ` ``) opens it. The host is admin automatically; others need
+`admin grant <clientId>` (see `players` for ids). `help` lists everything.
+
+Every command executes on the SERVER after a permission check. The "Look" group is
+presentation-only state, so it is broadcast by ClientRpc rather than run server-side —
+otherwise a host tuning the look would see a different frame from everyone else.
+
+- **World:** `weather <type> [seconds] [intensity]`, `time <hour> [dayLengthMinutes]`,
+  `snow <0-1>`
+- **Look:** `wet <0-1|auto>`, `exposure <evBias>`, `dither <0-2>`, `res <height|native>`
+- **Player:** `goto <storefront|warehouse|spawn>`, `tp <x> <y> <z>`, `speed <mult>`,
+  `heal`, `give <itemId> [count]`
+- **Session:** `quest <accept|complete> <id>`, `players`, `admin <grant|revoke> <clientId>`
+
+`snow` matters for testing: natural accumulation is ~0.004 coverage/sec, so reaching full
+depth takes four minutes of real time. `wet` likewise pins wetness instead of waiting out
+the soak curve. `exposure` is an EV offset — **negative brightens**.
+
 ## Graphics testbed (`Game/Setup/Build Test Buildings`)
 
 Two lighting testbeds in World, built entirely from box primitives so the numbers stay

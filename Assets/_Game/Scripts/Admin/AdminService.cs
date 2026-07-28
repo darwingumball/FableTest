@@ -190,6 +190,83 @@ namespace Game.Admin
                     return $"Revoked admin from client {target}.";
                 }
 
+                case "snow":
+                {
+                    if (args.Length < 2) return "usage: snow <0-1>   (0 = bare ground, 1 = full depth)";
+                    if (WeatherManager.Instance == null) return "Weather system missing.";
+                    float coverage = Mathf.Clamp01(ParseFloat(args[1], 0f));
+                    WeatherManager.Instance.ServerSetSnowCoverage(coverage);
+                    return $"Snow coverage -> {coverage:0.##} " +
+                           $"({WeatherManager.Instance.SnowDepthMeters:0.##}m deep). " +
+                           "Melts normally from here unless it is snowing.";
+                }
+
+                case "wet":
+                {
+                    if (args.Length < 2) return "usage: wet <0-1|auto>";
+                    float value = args[1].Equals("auto", StringComparison.OrdinalIgnoreCase)
+                        ? -1f : Mathf.Clamp01(ParseFloat(args[1], 0f));
+                    DebugVisualClientRpc(VisualCmd.Wetness, value);
+                    return value < 0f
+                        ? "Surface wetness follows the weather again."
+                        : $"Surface wetness pinned to {value:0.##}.";
+                }
+
+                case "exposure":
+                {
+                    if (args.Length < 2) return "usage: exposure <evBias>   negative = brighter, 0 = default";
+                    float bias = ParseFloat(args[1], 0f);
+                    DebugVisualClientRpc(VisualCmd.ExposureBias, bias);
+                    return $"Exposure bias -> {bias:0.##} EV ({(bias < 0f ? "brighter" : bias > 0f ? "darker" : "default")}).";
+                }
+
+                case "dither":
+                {
+                    if (args.Length < 2) return "usage: dither <0-2>   0 = off (default)";
+                    float amount = Mathf.Clamp(ParseFloat(args[1], 0f), 0f, 2f);
+                    DebugVisualClientRpc(VisualCmd.Dither, amount);
+                    return $"PSX dither -> {amount:0.##}.";
+                }
+
+                case "res":
+                {
+                    if (args.Length < 2) return "usage: res <height|native>   e.g. 240, 360, 480, native";
+                    int height = args[1].Equals("native", StringComparison.OrdinalIgnoreCase)
+                        ? 0 : ParseInt(args[1], 360);
+                    DebugVisualClientRpc(VisualCmd.InternalRes, height);
+                    return height <= 0 ? "PSX internal resolution -> native."
+                                       : $"PSX internal resolution -> {height}p.";
+                }
+
+                case "goto":
+                {
+                    if (args.Length < 2) return "usage: goto <storefront|warehouse|spawn>";
+                    Vector3 target;
+                    switch (args[1].ToLowerInvariant())
+                    {
+                        case "storefront": target = new Vector3(-26f, 1f, 28f); break;
+                        case "warehouse": target = new Vector3(26f, 1f, -10f); break;
+                        case "spawn": target = new Vector3(0f, 1f, 0f); break;
+                        default: return $"Unknown location '{args[1]}'.";
+                    }
+                    TeleportClientRpc(target, new ClientRpcParams
+                    {
+                        Send = new ClientRpcSendParams { TargetClientIds = new[] { sender } }
+                    });
+                    return $"Teleporting to {args[1]}.";
+                }
+
+                case "speed":
+                {
+                    if (args.Length < 2) return "usage: speed <multiplier>   1 = normal";
+                    float mult = Mathf.Clamp(ParseFloat(args[1], 1f), 0.1f, 2f);
+                    SpeedClientRpc(mult, new ClientRpcParams
+                    {
+                        Send = new ClientRpcSendParams { TargetClientIds = new[] { sender } }
+                    });
+                    return $"Move speed x{mult:0.##}.";
+                }
+
                 case "players":
                 {
                     var sb = new System.Text.StringBuilder("Connected:");
@@ -202,6 +279,43 @@ namespace Game.Admin
                 default:
                     return $"Unknown command '{cmd}'. Type help.";
             }
+        }
+
+        /// <summary>
+        /// Presentation-only debug knobs. These are local rendering state, not simulation,
+        /// but they broadcast so a host tuning the look sees the same frame everyone else
+        /// does - otherwise co-op screenshots and bug reports disagree.
+        /// </summary>
+        private enum VisualCmd { Wetness, ExposureBias, Dither, InternalRes }
+
+        [ClientRpc]
+        private void DebugVisualClientRpc(VisualCmd which, float value)
+        {
+            switch (which)
+            {
+                case VisualCmd.Wetness:
+                    World.SurfaceWetness.DebugOverride = value;
+                    break;
+                case VisualCmd.ExposureBias:
+                    WeatherManager.ExposureBias = value;
+                    break;
+                case VisualCmd.Dither:
+                    Core.SettingsService.Data.ditherStrength = value;
+                    Core.SettingsService.Save();
+                    break;
+                case VisualCmd.InternalRes:
+                    Core.SettingsService.Data.psxInternalHeight = Mathf.RoundToInt(value);
+                    Core.SettingsService.Save();
+                    break;
+            }
+        }
+
+        [ClientRpc]
+        private void SpeedClientRpc(float multiplier, ClientRpcParams _)
+        {
+            var player = NetworkPlayer.Local;
+            if (player != null && player.Controller != null)
+                player.Controller.SetSpeedMultiplier(multiplier);
         }
 
         [ClientRpc]
@@ -243,12 +357,22 @@ namespace Game.Admin
             int.TryParse(s, out var v) ? v : fallback;
 
         private const string CommandHelp =
-            "Commands:\n" +
+            "World:\n" +
             "  weather <type> [seconds] [intensity]   clear|overcast|fog|rain|storm|snow\n" +
             "  time <hour> [dayLengthMinutes]\n" +
-            "  give <itemId> [count]\n" +
+            "  snow <0-1>                             jump snow depth (skips accumulation)\n" +
+            "Look (broadcast to everyone):\n" +
+            "  wet <0-1|auto>                         pin surface wetness for reflections\n" +
+            "  exposure <evBias>                      negative = brighter, 0 = default\n" +
+            "  dither <0-2>                           PSX dither, 0 = off (default)\n" +
+            "  res <height|native>                    PSX internal res: 240/360/480/native\n" +
+            "Player:\n" +
+            "  goto <storefront|warehouse|spawn>\n" +
             "  tp <x> <y> <z>\n" +
+            "  speed <multiplier>                     1 = normal\n" +
             "  heal\n" +
+            "  give <itemId> [count]                  crate_small|ration_can|wrench_large|fuel_barrel\n" +
+            "Session:\n" +
             "  quest <accept|complete> <questId>\n" +
             "  players\n" +
             "  admin <grant|revoke> <clientId>        (host only)";

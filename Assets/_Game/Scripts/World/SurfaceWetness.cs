@@ -39,6 +39,15 @@ namespace Game.World
         /// <summary>0 = bone dry, 1 = soaked.</summary>
         public float Wetness => _wetness;
 
+        /// <summary>
+        /// Console `wet` command. Negative means "follow the weather"; 0..1 pins it so wet
+        /// reflections can be judged without waiting for rain to soak everything in.
+        /// </summary>
+        public static float DebugOverride = -1f;
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStatics() => DebugOverride = -1f;
+
         private struct Target
         {
             public Material Material;
@@ -87,13 +96,20 @@ namespace Game.World
 
         private void Update()
         {
-            float rain = WeatherManager.Instance != null ? WeatherManager.Instance.RainRate : 0f;
-            float soak = Mathf.Clamp01(rain / Mathf.Max(rainRateForFullWet, 1f));
+            if (DebugOverride >= 0f)
+            {
+                _wetness = Mathf.Clamp01(DebugOverride);
+            }
+            else
+            {
+                float rain = WeatherManager.Instance != null ? WeatherManager.Instance.RainRate : 0f;
+                float soak = Mathf.Clamp01(rain / Mathf.Max(rainRateForFullWet, 1f));
 
-            float delta = soak > 0.01f
-                ? wettingPerSecond * soak
-                : -dryingPerSecond;
-            _wetness = Mathf.Clamp01(_wetness + delta * Time.deltaTime);
+                float delta = soak > 0.01f
+                    ? wettingPerSecond * soak
+                    : -dryingPerSecond;
+                _wetness = Mathf.Clamp01(_wetness + delta * Time.deltaTime);
+            }
 
             Shader.SetGlobalFloat(GlobalWetnessId, _wetness);
 

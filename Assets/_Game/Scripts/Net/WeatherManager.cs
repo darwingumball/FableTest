@@ -213,7 +213,7 @@ namespace Game.Net
                 float ev = Mathf.Lerp(nightExposure, dayExposure, dayBlend);
                 float dimmer = cloudsOn ? _clouds.sunLightDimmer.value : 1f;
                 ev -= (1f - dimmer) * cloudExposureCompensation;
-                _exposure.fixedExposure.value = ev;
+                _exposure.fixedExposure.value = ev + ExposureBias;
             }
 
             // --- presentation outputs ---
@@ -276,5 +276,25 @@ namespace Game.Net
 
         public void ServerApplySaveState(WeatherType type, float intensity) =>
             ServerSetWeather(type, 0.1f, intensity);
+
+        /// <summary>
+        /// Jumps snow depth straight to a coverage without waiting out accumulation
+        /// (minutes of real time). Console `snow` command. Replicates like any other
+        /// coverage change, so late joiners and remote clients agree.
+        /// </summary>
+        public void ServerSetSnowCoverage(float coverage01)
+        {
+            if (!IsServer) return;
+            _snowCoverage.Value = Mathf.Clamp01(coverage01);
+        }
+
+        /// <summary>
+        /// Debug EV100 offset added to the time-driven exposure. NEGATIVE brightens.
+        /// Local-only presentation - the console broadcasts it so every client matches.
+        /// </summary>
+        public static float ExposureBias { get; set; }
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetExposureBias() => ExposureBias = 0f;
     }
 }
