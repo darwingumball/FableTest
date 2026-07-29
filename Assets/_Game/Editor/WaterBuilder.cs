@@ -452,6 +452,13 @@ namespace Game.Editor
             // underfoot at speed.
             so.FindProperty("heaveFollow").floatValue = 0.7f;
             so.FindProperty("heaveSmoothing").floatValue = 1.8f;
+            // The hull was rolling faster than the seas it sat in, because probes at exactly
+            // hull size read the metre-scale ripples as steep local slopes. Measuring the
+            // gradient over a longer baseline cancels those and leaves the swell; the slower
+            // tilt smoothing then filters what is left, so the roll period matches the waves
+            // you can actually see.
+            so.FindProperty("slopeBaseline").floatValue = 1.8f;
+            so.FindProperty("smoothing").floatValue = 0.9f;
             so.ApplyModifiedPropertiesWithoutUndo();
 
             var carry = boat.AddComponent<BoatRiderCarry>();

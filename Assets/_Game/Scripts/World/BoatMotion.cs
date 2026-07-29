@@ -56,8 +56,13 @@ namespace Game.World
                  "player stands on, and tracking every crest exactly throws them around; a " +
                  "heavy hull punches through the top of a wave rather than topping it.")]
         [SerializeField, Range(0f, 1f)] private float heaveFollow = 0.7f;
+        [Tooltip("Multiplies the distance the wave-slope probes sit from the centre. Above 1 " +
+                 "measures the slope over a longer span than the hull, which cancels waves " +
+                 "shorter than that span and leaves the long swell - the difference between " +
+                 "a hull rolling with the seas and one twitching on every ripple.")]
+        [SerializeField, Range(1f, 4f)] private float slopeBaseline = 1.8f;
         [Tooltip("Smoothing on tilt. A hull this size does not snap.")]
-        [SerializeField] private float smoothing = 2.5f;
+        [SerializeField] private float smoothing = 0.9f;
         [Tooltip("Heave is smoothed harder than tilt: vertical deck movement is the part " +
                  "that fights the riders' CharacterControllers, and roll is free because it " +
                  "only ever touches the visual hull.")]
@@ -131,18 +136,28 @@ namespace Game.World
                 Vector3 fwd = heading * Vector3.forward;
                 Vector3 right = heading * Vector3.right;
 
-                float bow = water.SampleHeight(target + fwd * hullLength);
-                float stern = water.SampleHeight(target - fwd * hullLength);
-                float port = water.SampleHeight(target - right * hullBeam);
-                float starboard = water.SampleHeight(target + right * hullBeam);
+                // Sampled over a WIDER baseline than the hull, and the slope is divided by
+                // that same wider baseline, so this stays a true surface gradient - just
+                // measured over a longer span. That is a spatial low-pass: waves shorter
+                // than the baseline largely cancel between the two probes, while the long
+                // swell comes through untouched. Sampling at exactly hull size let the
+                // metre-scale ripples dominate, which is why the boat rocked far faster
+                // than the seas it was sitting in.
+                float halfLength = hullLength * slopeBaseline;
+                float halfBeam = hullBeam * slopeBaseline;
+
+                float bow = water.SampleHeight(target + fwd * halfLength);
+                float stern = water.SampleHeight(target - fwd * halfLength);
+                float port = water.SampleHeight(target - right * halfBeam);
+                float starboard = water.SampleHeight(target + right * halfBeam);
 
                 float meanSurface = (bow + stern + port + starboard) * 0.25f;
                 heaveTarget = water.BaseLevel + (meanSurface - water.BaseLevel) * heaveFollow
                               + freeboard;
 
                 // Tilt is the slope across the hull: rise over run, in degrees.
-                pitchTarget = -Mathf.Atan2((bow - stern) * waveFollow, hullLength * 2f) * Mathf.Rad2Deg;
-                rollTarget = Mathf.Atan2((starboard - port) * waveFollow, hullBeam * 2f) * Mathf.Rad2Deg;
+                pitchTarget = -Mathf.Atan2((bow - stern) * waveFollow, halfLength * 2f) * Mathf.Rad2Deg;
+                rollTarget = Mathf.Atan2((starboard - port) * waveFollow, halfBeam * 2f) * Mathf.Rad2Deg;
 
                 pitchTarget = SoftLimit(pitchTarget);
                 rollTarget = SoftLimit(rollTarget);
