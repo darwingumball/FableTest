@@ -223,6 +223,105 @@ MapCamera — prefabs cannot store scene references, so that link lives on the i
     it `affectsVolumetric = true` + a `volumetricDimmer` above 1 or the glow stops at the
     surfaces it hits instead of hazing through fog.
 
+24. **`m_AngularDiameter` does NOT size a rendered celestial body.** HDRP has a second,
+    separate pair — `diameterMultiplerMode` / `diameterOverride` — and `diameterOverride`
+    **defaults to 0.5**, so any sun/moon left at the default draws at half a degree no
+    matter what angular diameter it claims. `m_AngularDiameter` is the physical value used
+    for shadow softness. This cost an hour of "why is the moon still a dot".
+
+25. **A celestial body's disc brightness is derived from its own light intensity.** In
+    emission mode, disc radiance = intensity / solid angle. Moonlight needs ~450 lux for
+    the ground to read at night, which across a 9° disc is ~200× the night exposure
+    ceiling — the disc clips to a white blob and `surfaceTint` will not pull it back.
+    Fix: **two lights.** The root light lights the world and draws nothing
+    (`interactsWithSky = false`); a dim child light draws the disc. Solid angle grows with
+    the SQUARE of the diameter, so derive the disc intensity from a target radiance or
+    resizing the body silently darkens it.
+
+26. **The sun cannot get that two-light treatment.** `PhysicallyBasedSky` sources ALL
+    atmospheric scattering from the light marked `interactsWithSky`. Move the sun's disc to
+    a dim child and the daytime sky goes nearly black. Tame the sun's *flare* instead —
+    Unity defaults it to 2° at full multiplier, which is what eats the screen, not the
+    0.5° disc.
+
+27. **The atmosphere reddens space emission.** Rayleigh scattering removes several times
+    more blue than red, so a star cubemap that measures neutral (verified: mean RGB
+    0.345/0.342/0.344) renders amber. Pre-multiply the texture by the inverse of zenith
+    transmittance (~0.82/0.87/1.0) rather than chasing it in the sky settings.
+
+28. **Never fix an input binding with `ChangeBinding(i).To(new InputBinding(...))`.** A
+    fresh `InputBinding` carries no action name, so it orphans the binding; the map then
+    throws `ArgumentNullException: actionNameOrId` from `FindAction(null)` while rebuilding
+    its lookup arrays, and the `.inputactions` asset is corrupt. Remove the action and
+    re-add it. Also **check for double-bound keys** — `ChatChannel` first went onto Tab,
+    which `TabMenu` already owned.
+
+29. **Builders run mid-recompile silently do the wrong thing.** Editing an editor script
+    then immediately invoking its menu item runs the OLD compiled code and reports success.
+    Confirm `EditorApplication.isCompiling == false` first. Related: a builder that opens
+    the World scene additively will **save whatever pose the scene is currently in** — a
+    temporary test pose got baked into `World.unity` (Sun intensity 0) this way.
+
+
+## Performance: measured, not assumed (2026-07-28)
+
+Baseline was 3351 draw calls / 15,918,618 triangles / 26.5 ms. Reflection probes were
+re-rendering the 180k-tri snow plane once per cube face. After giving the snow its own
+`SnowGround` layer and excluding it from probe culling masks (**the layer did not actually
+exist before — the exclusion was a silent no-op**), plus a 20 s probe interval gated on
+player distance: 2118 draw calls / 2,215,792 triangles.
+
+**The frame time barely moved, and that is the important result.** With the snow renderer
+disabled outright the frame is no faster (26.3 ms). GPU 23.8 ms and CPU main 23.4 ms are
+both saturated by the HDRP feature stack — volumetric clouds, volumetric fog, SSR, SSAO,
+four shadowed lights. Geometry is free at this scale. **The next optimisation pass belongs
+in quality tiers on those features, not in more mesh reduction.**
+
+Caveat when measuring: a reflection probe capture spikes the frame it lands on (one sample
+read 4M triangles / 55 ms). Freeze `PeriodicReflectionProbe` before sampling, and prefer
+`manage_profiler get_frame_timing` over a single `UnityStats` read.
+
+## Snow LOD ring mesh
+
+The snow plane is a player-following concentric-LOD mesh: 1/3 m spacing out to 16 m — the
+same as the old uniform grid, so trails are unchanged where you can see them — coarsening
+through 1 m / 4 m / 8 m rings to 160 m. 90,601 verts / 180,000 tris became 22,548 / 36,152.
+
+Three things it must keep doing:
+- **Snap the origin to an 8 m world lattice** (`SnowGroundFollow`). A freely sliding grid
+  samples different texels every frame and the surface visibly crawls. The snap step must
+  be a multiple of the coarsest ring's step.
+- **Skirt BOTH sides of every LOD seam.** Adjacent rings share corner vertices but the fine
+  edge has extra vertices between them, so the fine polyline and the coarse chord diverge
+  into a lens-shaped hole. Which side is higher varies, so one skirt is not enough.
+- **`SampleMask` returns 0 outside the deformation region**, not 1. The outer rings
+  deliberately overhang the 100 m region so the far corner is covered from anywhere inside
+  it; without this the overhang clamp-samples the edge texel and smears snow onto ground
+  that has no snow data.
+
+Collision does NOT follow the player — the root keeps the region-sized box collider and a
+child carries the mesh.
+
+## Chat and voice
+
+`ChatRelay` (NetworkBehaviour, World scene) — Local/Global/System channels. The **server**
+resolves who hears a Local message from real player positions, resolves the display name
+from `ServerPlayerRegistry`, and rate limits per client. Lines starting with `/` are split
+off before they can reach anyone else and go to `AdminService`, which already owns
+permissions — chat has no command path of its own.
+
+`VoiceChatService` (plain MonoBehaviour, World scene) — Vivox. Not a NetworkObject: Vivox
+carries its own audio, so the game only agrees a channel name and reports the listener pose.
+Channels are named from `NetworkSessionManager.SessionKey` (lobby id, or auth id for solo)
+so two sessions on the same Vivox project cannot hear each other.
+- The listener is the **camera**, not the body — panning uses the forward vector, so the
+  body would put voices behind you when you looked over your shoulder.
+- It self-starts in `Start()` and not from `OnSessionStarted`: that event fires *before*
+  the World scene loads, so a listener in this scene would never hear it.
+- Push-to-talk starts closed.
+
+Keys: Enter type, Y switch channel, V push-to-talk, backquote console. All rebindable.
+
 ### Dithering removed (2026-07-28) — Evan asked for this twice, do not reintroduce it
 
 The PSX pass originally used a **4x4 ordered Bayer matrix**, which tiles into a hard
