@@ -125,11 +125,15 @@ namespace Game.Editor
             foreach (var stray in hull.GetComponentsInChildren<Collider>())
                 Object.DestroyImmediate(stray);
 
+            // Everything below authors a LEVEL logic node on the root and, where it has
+            // anything to look at, a matching VISUAL twin under the rolling hull. See
+            // RollingTwin - the split is what lets the crane and the ladders lean with the boat
+            // without their aim boxes and climb tracks leaning away from the player.
             var helm = BuildHelm(boat.transform, trim, deck);
-            BuildBoardingLadder(boat.transform, trim);
-            BuildWheelhouseLadder(boat.transform, trim);
-            var zone = BuildCargoZone(boat.transform, outlineMaterial);
-            BuildCrane(boat.transform, trim, hullPaint);
+            BuildBoardingLadder(boat.transform, hull, trim);
+            BuildWheelhouseLadder(boat.transform, hull, trim);
+            var zone = BuildCargoZone(boat.transform, hull, outlineMaterial);
+            BuildCrane(boat.transform, hull, trim, hullPaint);
 
             BuildMotion(boat, hull, helm);
             BuildWake(boat);
@@ -285,6 +289,24 @@ namespace Game.Editor
             box.size = size;
         }
 
+        /// <summary>
+        /// A visual node under the ROLLING hull at the same boat-local pose as a logic node on
+        /// the LEVEL root. The two coincide exactly at zero roll and separate by the roll angle.
+        ///
+        /// This is the fitting-scale version of the deck's own compromise, and it is what stops
+        /// the crane and the ladders standing bolt upright out of a hull that is leaning: the
+        /// parts you LOOK at lean, while the aim boxes, climb tracks and top exits you have to
+        /// hit with a crosshair stay square to the deck you are standing on.
+        /// </summary>
+        private static Transform RollingTwin(Transform hull, string name, Transform logic)
+        {
+            var twin = new GameObject(name);
+            twin.transform.SetParent(hull, false);
+            twin.transform.localPosition = logic.localPosition;
+            twin.transform.localRotation = logic.localRotation;
+            return twin.transform;
+        }
+
         private static void BuildDeckLights(Transform hull)
         {
             // Point lights, NOT shadowed spots. A shadowed light on this boat could not use
@@ -351,7 +373,7 @@ namespace Game.Editor
         /// Aft of the lashing area on purpose, so climbing aboard never lands the player on
         /// top of stowed cargo.
         /// </summary>
-        private static void BuildBoardingLadder(Transform boat, Material trim)
+        private static void BuildBoardingLadder(Transform boat, Transform hull, Material trim)
         {
             var ladderGO = new GameObject("BoardingLadder");
             ladderGO.transform.SetParent(boat, false);
@@ -367,7 +389,7 @@ namespace Game.Editor
             grab.size = new Vector3(0.9f, 4.6f, 0.7f);
             grab.isTrigger = true;
 
-            Rungs(ladderGO.transform, trim, 4.2f, 9);
+            Rungs(RollingTwin(hull, "BoardingLadderRig", ladderGO.transform), trim, 4.2f, 9);
 
             var ladder = ladderGO.AddComponent<Ladder>();
             var so = new SerializedObject(ladder);
@@ -382,7 +404,7 @@ namespace Game.Editor
         }
 
         /// <summary>Deck to wheelhouse roof, up the aft face beside the doorway.</summary>
-        private static void BuildWheelhouseLadder(Transform boat, Material trim)
+        private static void BuildWheelhouseLadder(Transform boat, Transform hull, Material trim)
         {
             var ladderGO = new GameObject("RoofLadder");
             ladderGO.transform.SetParent(boat, false);
@@ -395,7 +417,7 @@ namespace Game.Editor
             grab.size = new Vector3(0.9f, 4.4f, 0.7f);
             grab.isTrigger = true;
 
-            Rungs(ladderGO.transform, trim, 4.4f, 9);
+            Rungs(RollingTwin(hull, "RoofLadderRig", ladderGO.transform), trim, 4.4f, 9);
 
             var ladder = ladderGO.AddComponent<Ladder>();
             var so = new SerializedObject(ladder);
@@ -426,7 +448,8 @@ namespace Game.Editor
 
         // ---------------- cargo ----------------
 
-        private static PlacementZone BuildCargoZone(Transform boat, Material outlineMaterial)
+        private static PlacementZone BuildCargoZone(Transform boat, Transform hull,
+            Material outlineMaterial)
         {
             // At the region centre with a zero offset, so cargo's replicated local pose is
             // relative to the middle of the lashing area and stays readable in the inspector.
@@ -434,8 +457,13 @@ namespace Game.Editor
             zoneGO.transform.SetParent(boat, false);
             zoneGO.transform.localPosition = ZoneCentre;
 
-            var outline = CargoBuilder.BuildZoneOutline(zoneGO.transform, Vector3.zero, ZoneSize,
-                0.35f, outlineMaterial);
+            // The border is PAINT ON THE DECK, so it goes on the rolling hull and stays glued
+            // to the planking. The logical region behind it stays level with the deck collider,
+            // and the ghost - not the border - is the authority on where cargo will actually
+            // land. They agree in ordinary water and diverge by the roll angle in a storm.
+            var outline = CargoBuilder.BuildZoneOutline(
+                RollingTwin(hull, "CargoZoneRig", zoneGO.transform),
+                Vector3.zero, ZoneSize, 0.35f, outlineMaterial);
 
             var zone = zoneGO.AddComponent<PlacementZone>();
             var so = new SerializedObject(zone);
@@ -450,21 +478,29 @@ namespace Game.Editor
         }
 
         /// <summary>
-        /// The picking crane. Hierarchy matters here:
+        /// The picking crane, split across the level root and the rolling hull:
         ///
-        ///   CraneRoot (yawed 180 so slew zero points aft)
-        ///     Pedestal      - yaws with the slew
-        ///       Boom        - pitches with the luff, local +Z along the boom
-        ///         BoomTip   - where the rope hangs from
-        ///     Rope          - scaled to the paid-out length
-        ///     HookRoot      - positioned under the tip; NOT a child of the boom
-        ///     Controls      - what the operator aims at, up on the wheelhouse roof
+        ///   Crane        (LEVEL root)  - CraneController
+        ///     Rope                     - placed in world space each frame
+        ///     HookRoot                 - placed in world space each frame; the cargo anchor
+        ///     Controls                 - what the operator aims at, on the wheelhouse roof
+        ///   Hull/CraneRig (ROLLING)    - yawed 180 so slew zero points aft
+        ///     Pedestal                 - yaws with the slew
+        ///       Boom                   - pitches with the luff, local +Z along the boom
+        ///         BoomTip              - where the rope hangs from
         ///
-        /// The hook hangs off the root rather than the boom so the rope stays plumb whatever
-        /// the boom is doing. The controls hang off the root as well, which is what lets the
-        /// interaction raycast resolve <see cref="CraneController"/> from five metres away.
+        /// The BOOM leans with the boat, because a crane bolted to a rolling deck leans with
+        /// it and a crane that did not looked broken. The ROPE does not: gravity is not a
+        /// property of the hull, so <see cref="CraneController"/> places the rope and hook in
+        /// world space, hanging plumb from wherever the tip has ended up. That is also why the
+        /// hook is not a child of the boom.
+        ///
+        /// The CONTROLS stay level, and stay parented under the controller: the interaction
+        /// raycast resolves an interactable with GetComponentInParent, which is what lets the
+        /// operator work the crane from a console five metres away from it - and a console that
+        /// rolled would swing out from under the crosshair every time the boat took a wave.
         /// </summary>
-        private static void BuildCrane(Transform boat, Material trim, Material paint)
+        private static void BuildCrane(Transform boat, Transform hull, Material trim, Material paint)
         {
             var craneGO = new GameObject("Crane");
             craneGO.transform.SetParent(boat, false);
@@ -473,10 +509,12 @@ namespace Game.Editor
             // its life. The operator's neutral stick is then their neutral view.
             craneGO.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
 
-            TestMaterials.Box("Base", craneGO.transform, new Vector3(0f, 0.15f, 0f),
+            var rig = RollingTwin(hull, "CraneRig", craneGO.transform);
+
+            TestMaterials.Box("Base", rig, new Vector3(0f, 0.15f, 0f),
                 new Vector3(1.1f, 0.3f, 1.1f), trim);
 
-            var pedestal = TestMaterials.Node("Pedestal", craneGO.transform,
+            var pedestal = TestMaterials.Node("Pedestal", rig,
                 new Vector3(0f, PEDESTAL_HEIGHT, 0f));
             TestMaterials.Box("Column", pedestal, new Vector3(0f, -PEDESTAL_HEIGHT * 0.5f, 0f),
                 new Vector3(0.7f, PEDESTAL_HEIGHT, 0.7f), paint);
@@ -499,9 +537,13 @@ namespace Game.Editor
             TestMaterials.Box("Block", hookRoot, new Vector3(0f, 0.16f, 0f),
                 new Vector3(0.26f, 0.32f, 0.26f), trim);
 
-            // Visuals only, all of them. A collider on the boom would drag the player around
-            // as it slewed, and a collider anywhere under the root would make the whole crane
-            // answer the interaction raycast - which is the Controls object's job alone.
+            // Visuals only, all of them, on BOTH nodes. The hull's blanket collider strip has
+            // already run by the time this is called, so CraneRig has to shed its own. A
+            // collider on the boom would drag the player around as it slewed, and a collider
+            // anywhere under the level node would make the whole crane answer the interaction
+            // raycast - which is the Controls object's job alone.
+            foreach (var stray in rig.GetComponentsInChildren<Collider>())
+                Object.DestroyImmediate(stray);
             foreach (var stray in craneGO.GetComponentsInChildren<Collider>())
                 Object.DestroyImmediate(stray);
 
@@ -551,7 +593,15 @@ namespace Game.Editor
             so.FindProperty("hoistMax").floatValue = 12f;
             so.FindProperty("slewRate").floatValue = 22f;
             so.FindProperty("luffRate").floatValue = 14f;
-            so.FindProperty("hoistStep").floatValue = 0.45f;
+            // A heavy block on a stiff wire: it lags the boom rather than chasing it, and the
+            // swing dies out rather than ringing. swingResponse is the weight knob - lower is
+            // heavier.
+            so.FindProperty("swingResponse").floatValue = 0.3f;
+            so.FindProperty("swingDamping").floatValue = 1.5f;
+            so.FindProperty("maxSwingDegrees").floatValue = 20f;
+            // Half a metre a click made setting a load down gently impossible - you overshot
+            // past the deck and back up again. Small enough now to feather it in.
+            so.FindProperty("hoistStep").floatValue = 0.14f;
             so.ApplyModifiedPropertiesWithoutUndo();
         }
 

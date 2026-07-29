@@ -496,6 +496,42 @@ MapCamera — prefabs cannot store scene references, so that link lives on the i
     hierarchy renumbers everything after it**, so anything holding a saved index (saves, later)
     must be migrated when a vessel's anchor list changes.
 
+59. **`QueryTriggerInteraction.Collide` on a single `Physics.Raycast` lets one irrelevant
+    trigger swallow every interaction behind it.** `InteractionSystem` has to include triggers,
+    because most interactables ARE triggers (helm, ladders, crane console). But HDRP's
+    underwater volume bounds is a **1200 × 10 × 1148 m trigger** whose top face sits at
+    y = −0.2, just below both boats' deck height. Standing on a deck puts the camera at ~y 0.4,
+    so looking DOWN at anything crossed that trigger first, got a hit with no `IInteractable`,
+    and gave up. Symptom: **E does nothing on a dropped item, while dragging it with Grab works
+    fine** — because `PhysicsPickup` uses `QueryTriggerInteraction.Ignore`. Nothing logged.
+
+    Fixed with `RaycastNonAlloc` over all hits, keeping the nearest that actually resolves to an
+    interactable with a prompt. That also fixes the reverse case (an interactable behind a
+    non-interactable trigger) and any future large trigger volume, of which there will be more.
+    **Anything raycasting with `Collide` needs to walk the hits, not take the first.**
+
+60. **A crane that lets go of a load inside its own reach re-hooks it on the next frame.** Auto
+    grab fired the instant `hook.First` went null, and a load released over open water is still
+    within the reach sphere for the first few frames of its fall — so Space looked like it did
+    nothing at all. The released object is now excluded from AUTO grab (never from a deliberate
+    keypress) until it has drifted twice the reach away, so the hysteresis cannot chatter at the
+    boundary.
+
+61. **The pendulum swing is the one thing on this boat the server has to integrate.** Everything
+    else about the vessel is a function of state every peer already holds, but a pendulum has
+    history: two peers starting from identical numbers drift apart, and a load hanging somewhere
+    different on each machine lands somewhere different depending on who you ask. So `Rig`
+    carries two more floats and the server owns them. Published on a **0.05° deadband** — the
+    boat is always moving a little, and without that a moored crane would write a
+    NetworkVariable every tick forever for a swing nobody can see.
+
+    Period comes from the rope length exactly as a real pendulum's does, so hauling the load up
+    under the block makes it snappy and paying out the drum makes it ponderous. `swingResponse`
+    is the weight knob (lower = heavier, because a heavy block resists being flicked around and
+    lags the boom). Verified numerically before shipping: stable at 60 Hz, returns to exactly
+    zero, 1.4–5° on a gentle slew and clamped at 20° on a hard one, settling in 0.5 s on a short
+    rope and 4.4 s on a long one.
+
 58. **Never read a component off a scene you have just closed.** `EditorSceneManager.CloseScene`
     destroys the objects, so a `Debug.Log` at the end of a builder that reports
     `zone.Index` throws `MissingReferenceException` *after* the scene has already been saved
@@ -540,12 +576,41 @@ Design notes that cost thought:
 - **Auto-grab only ever takes LOOSE cargo.** Anything already lashed into a zone was put there
   deliberately, so unlashing it needs Space — otherwise swinging the hook across a loaded deck
   would strip it.
-- **Cargo on the hook does not swing.** A pendulum would mean networked physics on a moving
-  vessel, which this project has refused everywhere else. It becomes a real dynamic body the
-  instant it is released, which is what makes dropping a pot over the side work.
-- **The crane is on the LEVEL root, not the rolling hull.** Its console has to stay under the
-  crosshair (gotcha 34) and its rope has to hang plumb. `ApplyRig` resolves "down" through
-  `InverseTransformDirection` anyway, so it stays correct if that ever changes.
+- **Cargo on the hook swings, but as a replicated pendulum, not as physics.** See gotcha 61.
+  It becomes a real dynamic body the instant it is released, which is what makes dropping a pot
+  over the side work.
+- **The crane is SPLIT between the level root and the rolling hull.** The boom leans with the
+  boat, because a crane bolted to a rolling deck leans with it. The rope does not — gravity is
+  not a property of the hull — so `ApplyRig` places the rope and hook in WORLD space, hanging
+  plumb from wherever the tip ended up. The console stays level and stays parented under the
+  controller, so the interaction raycast can still resolve it (gotcha 34) and it does not swing
+  out from under the crosshair on every wave.
+
+### What still does not roll, and why (open question for Evan)
+
+`RollingTwin` in `CrabBoatBuilder` is the pattern: a visual node under the hull at the same
+boat-local pose as a logic node on the level root. Crane boom, both ladders and the zone border
+all use it, so they lean with the boat.
+
+**Stowed cargo and the logical placement region still stay level**, and cannot be fixed the same
+way, because they are coupled to the deck COLLIDER staying level — which is the decision the
+whole boat rests on (a CharacterController is always world-upright and slides off any tilted
+collider). Specifically:
+
+- Cargo parented to a rolling anchor would have a tilted collider, so a player standing on a
+  crate would slide off it, and the crate's collider would no longer be flush with the level
+  deck collider (~0.9 m out at 18° roll, three metres off centreline).
+- `CargoAttachment` stores its pose relative to `CargoAnchor.AttachRoot`, so pointing a zone's
+  `attachRoot` at a rolling twin is a one-field change — but it would bake the roll angle at the
+  moment of placement into the stored pose, leaving a crate permanently askew if it was lashed
+  during a lean. Making that right means `PlacementZone.Plan` snapping yaw in the attach root's
+  frame while doing containment in the level frame.
+
+The real fix is to **tilt the deck collider with the hull and stop the CharacterController
+sliding** (detect "standing on a boat", project movement onto the deck plane, cancel
+gravity-induced drift). That makes deck, crane, ladders, zone and cargo all roll together —
+which is what "so it's all the same" actually asks for — but it changes the foundation every
+boat is built on, so it is not something to do quietly.
 
 
 ## Performance: measured, not assumed (2026-07-28)

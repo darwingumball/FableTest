@@ -24,18 +24,31 @@ namespace Game.World
     /// </summary>
     public class CraneController : NetworkBehaviour, IInteractable
     {
-        /// <summary>Replicated rig state. Three floats, sent only while someone is working it.</summary>
+        /// <summary>
+        /// Replicated rig state. Five floats, sent only while something is actually moving.
+        ///
+        /// The swing angles are in here rather than simulated locally on purpose. Everything
+        /// else about this boat is a function of state every peer already has, but a pendulum
+        /// is an integrator with history - two peers starting from the same numbers drift
+        /// apart, and a load hanging in a different place on each machine is a load that lands
+        /// somewhere different depending on who you ask. The server integrates it and everyone
+        /// reads the answer.
+        /// </summary>
         public struct Rig : INetworkSerializable
         {
             public float Slew;    // degrees about the pedestal
             public float Luff;    // boom elevation, degrees above horizontal
             public float Hoist;   // rope paid out below the boom tip, metres
+            public float SwingX;  // rope tilt about world X, degrees - displaces the load in Z
+            public float SwingZ;  // rope tilt about world Z, degrees - displaces the load in X
 
             public void NetworkSerialize<T>(BufferSerializer<T> s) where T : IReaderWriter
             {
                 s.SerializeValue(ref Slew);
                 s.SerializeValue(ref Luff);
                 s.SerializeValue(ref Hoist);
+                s.SerializeValue(ref SwingX);
+                s.SerializeValue(ref SwingZ);
             }
         }
 
@@ -68,16 +81,37 @@ namespace Game.World
                  "wheelhouse window.")]
         [SerializeField] private float slewRate = 24f;
         [SerializeField] private float luffRate = 15f;
-        [Tooltip("Metres of rope per scroll notch.")]
-        [SerializeField] private float hoistStep = 0.45f;
+        [Tooltip("Metres of rope per scroll notch. Small deliberately - a winch that moved a " +
+                 "load half a metre per click was impossible to set down gently.")]
+        [SerializeField] private float hoistStep = 0.16f;
 
         [Header("Grabbing")]
         [Tooltip("Take loose cargo the moment the hook reaches it, without a keypress. Cargo " +
                  "already lashed into a placement zone always needs Space - see CraneHook.")]
         [SerializeField] private bool autoGrabLoose = true;
 
+        [Header("Swing")]
+        [Tooltip("How much of the boom tip's acceleration becomes swing. LOWER READS AS " +
+                 "HEAVIER: a loaded hook resists being flicked around, so it lags the boom " +
+                 "instead of chasing it. This is the main weight knob.")]
+        [SerializeField, Range(0f, 1f)] private float swingResponse = 0.3f;
+        [Tooltip("How fast the swing dies away, per second. High values read as a heavy block " +
+                 "on a stiff wire; low values as a conker on a string.")]
+        [SerializeField] private float swingDamping = 1.5f;
+        [Tooltip("Ceiling on the swing angle. A crane load free to reach 60 degrees would be " +
+                 "through the wheelhouse window.")]
+        [SerializeField] private float maxSwingDegrees = 20f;
+        [Tooltip("Drive acceleration is clamped to this. A teleport - a boat respawning, the " +
+                 "mooring settling on the first frame - is an near-infinite acceleration and " +
+                 "would otherwise fire the load straight out sideways.")]
+        [SerializeField] private float maxDriveAcceleration = 18f;
+
         [Header("Client smoothing")]
         [SerializeField] private float smoothing = 10f;
+        [Tooltip("Swing is eased faster than the rest of the rig. It is the only part that " +
+                 "moves every tick, and easing it as slowly as the boom makes the load lag " +
+                 "visibly behind its own rope.")]
+        [SerializeField] private float swingSmoothing = 18f;
 
         private const ulong NoOperator = ulong.MaxValue;
 
@@ -89,8 +123,21 @@ namespace Game.World
         // Server-side live input from the operator.
         private float _slewInput, _luffInput;
 
+        // Server-side pendulum, in RADIANS. Kept in radians throughout so the trig below has
+        // no conversions buried in it; only the published value is degrees.
+        private float _swingA, _swingB;          // A tilts about X, B about Z
+        private float _swingVelocityA, _swingVelocityB;
+        private Vector3 _lastTip, _tipVelocity, _tipAcceleration;
+        private bool _swingInitialised;
+
+        // The load that was just let go of. Excluded from AUTO grab until it has drifted clear,
+        // or releasing over the water would re-hook it on the very next frame - see
+        // ServerIntegrate.
+        private CargoAttachment _justReleased;
+
         // Local presentation, eased toward _rig on every peer including the server.
         private float _slew, _luff, _hoist;
+        private float _swingX, _swingZ;
         private bool _initialised;
 
         private InputAction _interactAction, _grabAction, _winchAction;
@@ -300,11 +347,108 @@ namespace Game.World
                 _rig.Value = rig;
             }
 
-            if (autoGrabLoose && _operator.Value != NoOperator && hook != null && hook.First == null)
+            IntegrateSwing(dt);
+
+            if (!autoGrabLoose || _operator.Value == NoOperator || hook == null) return;
+
+            // A load let go over the water is still inside the hook's reach for the first few
+            // frames of its fall, so an unguarded auto-grab re-hooked it immediately and Space
+            // looked like it did nothing. It becomes eligible again once it has drifted clear -
+            // twice the reach, so the hysteresis cannot chatter at the boundary.
+            if (_justReleased != null)
             {
-                var loose = hook.FindTarget(looseOnly: true);
-                if (loose != null) ServerGrab(loose);
+                float clear = hook.Reach * 2f;
+                if (!_justReleased.IsSpawned ||
+                    (_justReleased.transform.position - hook.AttachRoot.position).sqrMagnitude
+                        > clear * clear)
+                    _justReleased = null;
             }
+
+            if (hook.First != null) return;
+
+            var loose = hook.FindTarget(looseOnly: true, exclude: _justReleased);
+            if (loose != null) ServerGrab(loose);
+        }
+
+        /// <summary>
+        /// A damped pendulum on the rope, driven by the boom tip's own acceleration - which
+        /// already contains everything that should make a load swing: slewing, luffing, and the
+        /// boat rocking underneath the whole crane.
+        ///
+        /// Small-angle-independent in the restoring term (real sine, not a linearisation) so a
+        /// load pushed to the swing limit still behaves; the two axes are treated as
+        /// independent, which is exact for a plane swing and close enough for a circular one.
+        /// </summary>
+        private void IntegrateSwing(float dt)
+        {
+            if (boomTip == null || dt <= 0f) return;
+
+            Vector3 tip = boomTip.position;
+            if (!_swingInitialised)
+            {
+                _lastTip = tip;
+                _swingInitialised = true;
+                return;
+            }
+
+            // Finite differences on a transform written once a frame are noisy, and
+            // differencing twice squares that noise. Both stages are low-passed or the load
+            // buzzes instead of swinging.
+            Vector3 velocity = (tip - _lastTip) / dt;
+            _lastTip = tip;
+            Vector3 smoothed = Vector3.Lerp(_tipVelocity, velocity, 1f - Mathf.Exp(-14f * dt));
+            Vector3 acceleration = (smoothed - _tipVelocity) / dt;
+            _tipVelocity = smoothed;
+            _tipAcceleration = Vector3.Lerp(_tipAcceleration, acceleration,
+                1f - Mathf.Exp(-10f * dt));
+
+            Vector3 drive = Vector3.ClampMagnitude(
+                new Vector3(_tipAcceleration.x, 0f, _tipAcceleration.z),
+                maxDriveAcceleration) * swingResponse;
+
+            // Period comes from the rope length, exactly as a real pendulum's does, so hauling
+            // the load right up under the block makes it snappy and paying out a full drum
+            // makes it slow and ponderous. Floored so a fully-hauled hook cannot produce an
+            // absurd frequency.
+            float length = Mathf.Max(_rig.Value.Hoist, 0.6f);
+            float gravity = -Physics.gravity.y;
+
+            // Positive A tilts the load toward -Z, so +Z drive pushes A up. Positive B tilts it
+            // toward +X, so +X drive pushes B down. Both restore toward zero.
+            float accelA = (-gravity * Mathf.Sin(_swingA) + drive.z * Mathf.Cos(_swingA)) / length
+                           - swingDamping * _swingVelocityA;
+            float accelB = (-gravity * Mathf.Sin(_swingB) - drive.x * Mathf.Cos(_swingB)) / length
+                           - swingDamping * _swingVelocityB;
+
+            _swingVelocityA += accelA * dt;
+            _swingVelocityB += accelB * dt;
+            _swingA += _swingVelocityA * dt;
+            _swingB += _swingVelocityB * dt;
+
+            float limit = maxSwingDegrees * Mathf.Deg2Rad;
+            if (Mathf.Abs(_swingA) > limit)
+            {
+                _swingA = Mathf.Sign(_swingA) * limit;
+                _swingVelocityA = 0f;
+            }
+            if (Mathf.Abs(_swingB) > limit)
+            {
+                _swingB = Mathf.Sign(_swingB) * limit;
+                _swingVelocityB = 0f;
+            }
+
+            // Published on a deadband, not every frame. The boat is always moving a little, so
+            // without this a moored crane would put a NetworkVariable write on the wire every
+            // tick forever for a swing nobody can see.
+            var current = _rig.Value;
+            float swingX = _swingA * Mathf.Rad2Deg;
+            float swingZ = _swingB * Mathf.Rad2Deg;
+            if (Mathf.Abs(swingX - current.SwingX) < 0.05f &&
+                Mathf.Abs(swingZ - current.SwingZ) < 0.05f) return;
+
+            current.SwingX = swingX;
+            current.SwingZ = swingZ;
+            _rig.Value = current;
         }
 
         private void ApplyRig(float dt)
@@ -317,6 +461,8 @@ namespace Game.World
                 _slew = rig.Slew;
                 _luff = rig.Luff;
                 _hoist = rig.Hoist;
+                _swingX = rig.SwingX;
+                _swingZ = rig.SwingZ;
                 _initialised = true;
             }
             else
@@ -325,6 +471,10 @@ namespace Game.World
                 _slew = Mathf.Lerp(_slew, rig.Slew, k);
                 _luff = Mathf.Lerp(_luff, rig.Luff, k);
                 _hoist = Mathf.Lerp(_hoist, rig.Hoist, k);
+
+                float swingK = 1f - Mathf.Exp(-swingSmoothing * dt);
+                _swingX = Mathf.Lerp(_swingX, rig.SwingX, swingK);
+                _swingZ = Mathf.Lerp(_swingZ, rig.SwingZ, swingK);
             }
 
             if (pedestal != null) pedestal.localRotation = Quaternion.Euler(0f, _slew, 0f);
@@ -333,21 +483,24 @@ namespace Game.World
 
             if (boomTip == null || hookRoot == null) return;
 
-            // The hook hangs off the CRANE root, not the boom, so the rope stays plumb however
-            // the boom is set instead of swinging out sideways with the luff. "Down" is
-            // resolved through the crane's own transform rather than assumed to be local -Y,
-            // so this stays correct if the crane is ever mounted on something that tilts.
-            Vector3 tip = transform.InverseTransformPoint(boomTip.position);
-            Vector3 down = transform.InverseTransformDirection(Vector3.down);
+            // The rope and hook are placed in WORLD space, deliberately. The boom hangs off the
+            // rolling hull so it leans with the boat, while gravity does not - resolving this
+            // in world space means the rope hangs plumb from wherever the tip has ended up,
+            // with no assumption about how either object is parented.
+            Vector3 tip = boomTip.position;
+            Quaternion swing = Quaternion.AngleAxis(_swingX, Vector3.right)
+                             * Quaternion.AngleAxis(_swingZ, Vector3.forward);
+            Vector3 ropeDirection = swing * Vector3.down;
 
-            hookRoot.localPosition = tip + down * _hoist;
-            // The block hangs level with the world, not with whatever it is bolted to.
-            hookRoot.localRotation = Quaternion.Inverse(transform.rotation);
+            // The block hangs along the rope rather than staying bolt upright, so a swinging
+            // load leans into the swing the way a real one does.
+            hookRoot.SetPositionAndRotation(tip + ropeDirection * _hoist, swing);
 
             if (rope != null)
             {
-                rope.localPosition = tip + down * (_hoist * 0.5f);
-                rope.localRotation = Quaternion.FromToRotation(Vector3.up, -down);
+                rope.SetPositionAndRotation(tip + ropeDirection * (_hoist * 0.5f), swing);
+                // A unit cube: scaling Y by the length gives exactly that length, and the
+                // rotation above has already aligned local +Y back up the rope.
                 rope.localScale = new Vector3(ropeThickness, _hoist, ropeThickness);
             }
         }
@@ -358,11 +511,16 @@ namespace Game.World
         {
             if (hook == null) return;
 
+            // Releasing ALWAYS works, wherever the load happens to be - mid-air over open
+            // water included. That is what makes it possible to fish a pot up on one side and
+            // let it go over another vessel's deck.
             var load = hook.First;
             if (load != null) { ServerRelease(load); return; }
 
             // Space takes anything in reach, lashed or not - this is the deliberate keypress
-            // that lets the operator lift a pot back off a loaded deck.
+            // that lets the operator lift a pot back off a loaded deck. It also clears the
+            // auto-grab block, because a keypress is never something to second-guess.
+            _justReleased = null;
             var target = hook.FindTarget(looseOnly: false);
             if (target != null) ServerGrab(target);
         }
@@ -390,6 +548,11 @@ namespace Game.World
 
             // Over a lashing area with a legal plan? Lash it. Otherwise let go and let physics
             // have it - which is what makes dropping a pot over the side work at all.
+            // Blocked from the automatic grab until it drifts clear, or the hook it is still
+            // falling through would take it straight back. Set before either branch: cargo
+            // lashed into a zone must not be re-hooked either.
+            _justReleased = cargo;
+
             Vector3 point = cargo.transform.position;
             var zone = PlacementZone.Find(point);
             if (zone != null && zone.Plan(cargo.gameObject, point,

@@ -30,7 +30,11 @@ namespace Game.World
         /// there, so unlashing it takes a deliberate keypress - otherwise swinging the hook
         /// across a loaded deck would strip it.
         /// </param>
-        public CargoAttachment FindTarget(bool looseOnly)
+        /// <param name="exclude">
+        /// Skipped outright. Used for the load that was just released and is still falling
+        /// through the hook's own reach volume - see CraneController.
+        /// </param>
+        public CargoAttachment FindTarget(bool looseOnly, CargoAttachment exclude = null)
         {
             Vector3 origin = AttachRoot.position;
             var hits = Physics.OverlapSphere(origin, reach, grabMask, QueryTriggerInteraction.Ignore);
@@ -43,6 +47,7 @@ namespace Game.World
                 var cargo = hit.GetComponentInParent<CargoAttachment>();
                 if (cargo == null || !cargo.IsSpawned) continue;
                 if (cargo.Anchor == this) continue;              // already ours
+                if (cargo == exclude) continue;
                 if (looseOnly && cargo.IsAttached) continue;
 
                 float distance = (cargo.transform.position - origin).sqrMagnitude;
