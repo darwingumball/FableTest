@@ -16,9 +16,12 @@ namespace Game.World
     public class PeriodicReflectionProbe : MonoBehaviour
     {
         [Tooltip("Seconds between captures. Lighting here changes over minutes, not frames.")]
-        [SerializeField] private float interval = 8f;
+        [SerializeField] private float interval = 20f;
         [Tooltip("Randomised start delay so probes stagger instead of spiking together.")]
-        [SerializeField] private float maxStagger = 4f;
+        [SerializeField] private float maxStagger = 6f;
+        [Tooltip("Skip captures entirely when no local player is this close. A probe " +
+                 "nobody can see is pure cost.")]
+        [SerializeField] private float activeDistance = 45f;
 
         private HDAdditionalReflectionData _probe;
         private float _nextCapture;
@@ -33,6 +36,15 @@ namespace Game.World
         {
             if (_probe == null || Time.time < _nextCapture) return;
             _nextCapture = Time.time + interval;
+
+            // Each capture re-renders the scene six times. Only pay for it when the
+            // reflections could actually be on screen.
+            var player = Game.Net.NetworkPlayer.Local;
+            if (player != null &&
+                (player.transform.position - transform.position).sqrMagnitude >
+                activeDistance * activeDistance)
+                return;
+
             _probe.RequestRenderNextUpdate();
         }
     }

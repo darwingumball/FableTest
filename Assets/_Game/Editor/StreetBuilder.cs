@@ -116,7 +116,7 @@ namespace Game.Editor
                 new Vector3(0f, height - 0.25f, headZ),
                 new Vector3(75f, reachDirection > 0 ? 0f : 180f, 0f),
                 new Color(1f, 0.76f, 0.45f),
-                lumens: 54000f, range: 22f, angle: 110f, volumetric: 3.5f, shadows: true,
+                lumens: 54000f, range: 22f, angle: 110f, volumetric: 3.5f, shadows: false,
                 group: "street", nightBoost: 3f);
         }
     }

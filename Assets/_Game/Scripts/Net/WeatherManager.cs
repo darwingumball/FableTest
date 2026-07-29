@@ -65,8 +65,12 @@ namespace Game.Net
 
         [Header("Exposure curve (EV100 - higher is darker)")]
         [Tooltip("Exposure at full day. Auto-exposure was rejected here: a big bright " +
-                 "surface (snow) drags it dark and washes out the authored look.")]
-        [SerializeField] private float dayExposure = 11.8f;
+                 "surface (snow) drags it dark and washes out the authored look.\n\n" +
+                 "Derived, not eyeballed: HDRP maps luminance up to ~1.2 * 2^EV. Sunlit " +
+                 "snow is albedo 0.9 under 40000 lux = 0.9 * 40000 / PI ~ 11500 cd/m^2, " +
+                 "which needs EV ~13.2. Anything lower clips the snow to flat white and " +
+                 "takes the trails, the deformation normals and the sky with it.")]
+        [SerializeField] private float dayExposure = 13.2f;
         [SerializeField] private float nightExposure = 8.0f;
         [Tooltip("How much heavy cloud cover brightens the image to stay readable.")]
         [SerializeField] private float cloudExposureCompensation = 1.3f;
@@ -96,13 +100,37 @@ namespace Game.Net
         /// </summary>
         public float SnowDepthMeters => _snowCoverage.Value * maxSnowDepth;
 
+        [Header("Sky bounce")]
+        [Tooltip("Ground albedo the sky model bounces back up. This is the ONLY thing " +
+                 "lighting a facade that faces away from the sun, so a near-black ground " +
+                 "tint is why unlit walls read as flat black at noon.")]
+        [SerializeField] private Color bareGroundTint = new(0.16f, 0.15f, 0.14f);
+        [Tooltip("Ground tint at full snow cover. Lying snow really does throw most of the " +
+                 "sunlight back up, and it is what makes a snowy day read as bright.")]
+        [SerializeField] private Color snowGroundTint = new(0.62f, 0.64f, 0.68f);
+
         private Fog _fog;
         private VolumetricClouds _clouds;
         private Exposure _exposure;
+        private PhysicallyBasedSky _sky;
         private static readonly int SnowHeightId = Shader.PropertyToID("_SnowHeightMeters");
 
+        /// <summary>
+        /// Cloud cover's dimming of the sun, 1 = clear sky. HDRP applies this to lit
+        /// geometry automatically, but shaders that light themselves from
+        /// <c>_GameSunLux</c> (the snow ground) have to fold it in by hand - otherwise
+        /// overcast brightens the exposure while the snow keeps outputting full sunlight,
+        /// and the snow clips to flat white exactly when the weather turns.
+        /// Defaults to 1 so a scene with no WeatherManager still lights correctly.
+        /// </summary>
+        public static float CloudSunDimmer { get; private set; } = 1f;
+
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
-        private static void ResetStatics() => Instance = null;
+        private static void ResetStatics()
+        {
+            Instance = null;
+            CloudSunDimmer = 1f;
+        }
 
         private void Awake()
         {
@@ -158,6 +186,12 @@ namespace Game.Net
             _exposure.mode.value = ExposureMode.Fixed;
             _exposure.fixedExposure.overrideState = true;
             _exposure.fixedExposure.value = dayExposure;
+
+            // Only the ground tint is overridden - the rest of the sky (atmosphere, sun
+            // disc, aerosols) stays authored in the scene profile.
+            _sky = profile.Add<PhysicallyBasedSky>(overrides: false);
+            _sky.groundTint.overrideState = true;
+            _sky.groundTint.value = bareGroundTint;
         }
 
         private void Update()
@@ -215,9 +249,14 @@ namespace Game.Net
                 float dayBlend = World.SunController.DayBlend01(NetworkTimeSync.Instance.HourOfDay);
                 float ev = Mathf.Lerp(nightExposure, dayExposure, dayBlend);
                 float dimmer = cloudsOn ? _clouds.sunLightDimmer.value : 1f;
+                CloudSunDimmer = dimmer;
                 ev -= (1f - dimmer) * cloudExposureCompensation;
                 _exposure.fixedExposure.value = ev + ExposureBias;
             }
+
+            // --- sky bounce: snow cover decides how much light comes back off the ground ---
+            if (_sky != null)
+                _sky.groundTint.value = Color.Lerp(bareGroundTint, snowGroundTint, _snowCoverage.Value);
 
             // --- presentation outputs ---
             RainRate = Mathf.Lerp(from.rainRate, to.rainRate, k) * intensity;

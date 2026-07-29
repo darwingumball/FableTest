@@ -22,6 +22,11 @@ namespace Game.Editor
     {
         private const string WORLD_SCENE = "Assets/_Game/Scenes/World.unity";
         private const string ROOT_NAME = "TestApartment";
+        // The elevator and its button live at the scene root (see BuildElevator), so a
+        // rebuild has to clear them by name too - otherwise every run stacks another
+        // NetworkObject cab in the same shaft.
+        private const string ELEVATOR_NAME = "ApartmentElevator";
+        private const string BUTTON_NAME = "ApartmentElevatorButton";
 
         private static readonly Vector3 Origin = new(0f, 0f, 34f);
 
@@ -39,14 +44,19 @@ namespace Game.Editor
         [MenuItem("Game/Setup/Build Apartment")]
         public static void Build()
         {
+            // Exterior stays grey concrete; interiors are painted white with carpet.
+            // High-albedo walls also do most of the work of making a room read as lit -
+            // bounce off 0.80 walls is worth more than another fixture.
             var concrete = TestMaterials.Lit("TB_ApartConcrete", new Color(0.26f, 0.25f, 0.24f), 0.20f, 0f);
-            var interior = TestMaterials.Lit("TB_ApartInterior", new Color(0.42f, 0.39f, 0.35f), 0.25f, 0f);
+            var interior = TestMaterials.Lit("TB_ApartWall", new Color(0.80f, 0.79f, 0.76f), 0.12f, 0f);
+            var carpet = TestMaterials.Lit("TB_ApartCarpet", new Color(0.30f, 0.26f, 0.24f), 0.04f, 0f);
             var trim = TestMaterials.Lit("TB_Trim", new Color(0.12f, 0.13f, 0.16f), 0.55f, 0.6f);
-            var windowGlow = TestMaterials.Emissive("TB_ApartWindow", new Color(1f, 0.78f, 0.48f), 320f);
 
             var scene = EditorSceneManager.OpenScene(WORLD_SCENE, OpenSceneMode.Additive);
             foreach (var existing in scene.GetRootGameObjects())
-                if (existing.name == ROOT_NAME) Object.DestroyImmediate(existing);
+                if (existing.name == ROOT_NAME || existing.name == ELEVATOR_NAME ||
+                    existing.name == BUTTON_NAME)
+                    Object.DestroyImmediate(existing);
 
             var parent = new GameObject(ROOT_NAME);
             SceneManager.MoveGameObjectToScene(parent, scene);
@@ -55,9 +65,9 @@ namespace Game.Editor
 
             float totalHeight = FLOORS * FLOOR_HEIGHT;
 
-            BuildShell(root, concrete, totalHeight);
+            BuildShell(root, concrete, carpet, totalHeight);
             for (int floor = 0; floor < FLOORS; floor++)
-                BuildFloor(root, floor, interior, trim, windowGlow);
+                BuildFloor(root, floor, interior, carpet, trim);
 
             BuildElevator(scene, root, trim);
 
@@ -72,12 +82,12 @@ namespace Game.Editor
             Debug.Log($"[ApartmentBuilder] {FLOORS}-storey apartment built at {Origin}.");
         }
 
-        private static void BuildShell(Transform root, Material concrete, float height)
+        private static void BuildShell(Transform root, Material concrete, Material carpet, float height)
         {
             // Ground slab, then perimeter. The front (+Z) face is left to BuildFloor so it
             // can leave window and door openings per storey.
             TestMaterials.Box("GroundSlab", root, new Vector3(0f, 0.1f, 0f),
-                new Vector3(HALF_X * 2f, 0.2f, HALF_Z * 2f), concrete);
+                new Vector3(HALF_X * 2f, 0.2f, HALF_Z * 2f), carpet);
             TestMaterials.Box("WallBack", root, new Vector3(0f, height * 0.5f, -HALF_Z),
                 new Vector3(HALF_X * 2f, height, WALL), concrete);
             TestMaterials.Box("WallLeft", root, new Vector3(-HALF_X, height * 0.5f, 0f),
@@ -91,7 +101,7 @@ namespace Game.Editor
         }
 
         private static void BuildFloor(Transform parent, int floor, Material interior,
-            Material trim, Material windowGlow)
+            Material carpet, Material trim)
         {
             float y = floor * FLOOR_HEIGHT;
             var root = TestMaterials.Node($"Floor{floor}", parent, new Vector3(0f, y, 0f));
@@ -102,12 +112,12 @@ namespace Game.Editor
                 float leftWidth = SHAFT_MIN_X - (-HALF_X);
                 TestMaterials.Box("SlabLeft", root,
                     new Vector3(-HALF_X + leftWidth * 0.5f, 0.1f, 0f),
-                    new Vector3(leftWidth, 0.2f, HALF_Z * 2f), interior);
+                    new Vector3(leftWidth, 0.2f, HALF_Z * 2f), carpet);
 
                 float rightWidth = HALF_X - SHAFT_MAX_X;
                 TestMaterials.Box("SlabRight", root,
                     new Vector3(SHAFT_MAX_X + rightWidth * 0.5f, 0.1f, 0f),
-                    new Vector3(rightWidth, 0.2f, HALF_Z * 2f), interior);
+                    new Vector3(rightWidth, 0.2f, HALF_Z * 2f), carpet);
 
                 float shaftWidth = SHAFT_MAX_X - SHAFT_MIN_X;
                 float sideDepth = HALF_Z - SHAFT_HALF_Z;
@@ -115,11 +125,11 @@ namespace Game.Editor
                     TestMaterials.Box($"SlabShaftSide{s}", root,
                         new Vector3((SHAFT_MIN_X + SHAFT_MAX_X) * 0.5f, 0.1f,
                                     s * (SHAFT_HALF_Z + sideDepth * 0.5f)),
-                        new Vector3(shaftWidth, 0.2f, sideDepth), interior);
+                        new Vector3(shaftWidth, 0.2f, sideDepth), carpet);
             }
 
             // Front facade: piers between window bays, with a door gap on the ground floor.
-            BuildFacade(root, floor, interior, windowGlow);
+            BuildFacade(root, floor, interior);
 
             // Partition splitting the storey into two rooms, with a doorway through it.
             TestMaterials.Box("Partition", root, new Vector3(2f, FLOOR_HEIGHT * 0.5f, -3.2f),
@@ -144,7 +154,7 @@ namespace Game.Editor
                 group: "apartment", nightBoost: 1.3f);
         }
 
-        private static void BuildFacade(Transform root, int floor, Material concrete, Material windowGlow)
+        private static void BuildFacade(Transform root, int floor, Material concrete)
         {
             const float sill = 0.9f;
             const float windowHeight = 1.7f;
@@ -184,13 +194,9 @@ namespace Game.Editor
                         new Vector3(pierWidth, windowHeight, WALL), concrete);
                 previousEdge = bayCentres[i] + bayHalf;
 
-                // Glowing pane so the block reads as occupied from the street. Ground floor
-                // keeps its middle bays open as the entrance.
-                bool isDoorway = floor == 0 && (i == 1 || i == 2);
-                if (!isDoorway)
-                    TestMaterials.Box($"Window{i}", root,
-                        new Vector3(bayCentres[i], sill + windowHeight * 0.5f, HALF_Z),
-                        new Vector3(bayHalf * 2f, windowHeight, 0.06f), windowGlow);
+                // Bays are left as open holes - no glass, no emissive pane. Interior
+                // light spills out through them on its own, which reads far better than a
+                // flat glowing rectangle and lets daylight in during the day.
             }
 
             float lastPier = HALF_X - previousEdge;
@@ -210,7 +216,7 @@ namespace Game.Editor
 
             // Kept as a scene ROOT, not a child of the building: NGO scene objects are
             // simplest to reason about unparented, and the platform writes world transforms.
-            var elevator = new GameObject("ApartmentElevator");
+            var elevator = new GameObject(ELEVATOR_NAME);
             SceneManager.MoveGameObjectToScene(elevator, scene);
             elevator.transform.position = parent.position + new Vector3(shaftX, 0.25f, 0f);
 
@@ -234,7 +240,7 @@ namespace Game.Editor
             cso.ApplyModifiedPropertiesWithoutUndo();
 
             // Call button just outside the shaft on the ground floor.
-            var button = new GameObject("ApartmentElevatorButton");
+            var button = new GameObject(BUTTON_NAME);
             SceneManager.MoveGameObjectToScene(button, scene);
             button.transform.position = parent.position + new Vector3(SHAFT_MAX_X + 0.4f, 0f, 2f);
 

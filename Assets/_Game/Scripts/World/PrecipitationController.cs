@@ -30,9 +30,11 @@ namespace Game.World
         private void Start()
         {
             _rain = CreateSystem("Rain", new Color(0.6f, 0.65f, 0.75f, 0.35f),
-                speed: 22f, size: 0.03f, stretch: 8f);
+                speed: 22f, size: 0.03f, stretch: 8f, collide: collideWithWorld);
+            // Snow drifts slowly and is tiny on screen; world collision on it costs the
+            // same as rain and buys nothing you can actually see.
             _snow = CreateSystem("Snow", new Color(0.9f, 0.9f, 0.95f, 0.8f),
-                speed: 1.6f, size: 0.045f, stretch: 0f);
+                speed: 1.6f, size: 0.045f, stretch: 0f, collide: false);
         }
 
         private void LateUpdate()
@@ -76,7 +78,7 @@ namespace Game.World
             emission.rateOverTime = rate;
         }
 
-        private ParticleSystem CreateSystem(string name, Color color, float speed, float size, float stretch)
+        private ParticleSystem CreateSystem(string name, Color color, float speed, float size, float stretch, bool collide)
         {
             var go = new GameObject(name);
             go.transform.SetParent(transform, false);
@@ -88,7 +90,7 @@ namespace Game.World
             main.startSpeed = speed;
             main.startSize = size;
             main.startColor = color;
-            main.maxParticles = 4000;
+            main.maxParticles = 2000;
             main.simulationSpace = ParticleSystemSimulationSpace.World;
             main.gravityModifier = stretch > 0f ? 0.4f : 0.05f;
 
@@ -104,7 +106,7 @@ namespace Game.World
             emission.rateOverTime = 0f;
 
             var collision = ps.collision;
-            collision.enabled = collideWithWorld;
+            collision.enabled = collide;
             collision.type = ParticleSystemCollisionType.World;
             collision.mode = ParticleSystemCollisionMode.Collision3D;
             // Medium quality collides against a cached shape set rather than raycasting

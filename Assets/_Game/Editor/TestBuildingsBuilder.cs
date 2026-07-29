@@ -193,7 +193,7 @@ namespace Game.Editor
                 TestMaterials.Box($"StripHousing{i}", root, new Vector3(0f, 6.85f, z), new Vector3(9f, 0.3f, 0.4f), m.Trim);
                 TestMaterials.Box($"StripRed{i}", root, new Vector3(0f, 6.68f, z), new Vector3(8.4f, 0.06f, 0.28f), m.NeonRed);
                 TestMaterials.SpotLight($"WorkLight{i}", root, new Vector3(0f, 6.55f, z), new Vector3(90f, 0f, 0f),
-                    new Color(1f, 0.13f, 0.08f), 60000f, 22f, 110f, volumetric: 4f, shadows: true,
+                    new Color(1f, 0.13f, 0.08f), 60000f, 22f, 110f, volumetric: 4f, shadows: i == 1,
                     group: "warehouse", nightBoost: 3.5f);
             }
 
@@ -275,6 +275,11 @@ namespace Game.Editor
             probe.boxProjection = true;
             probe.hdr = true;
             probe.resolution = 128;
+            // Cull the snow ground. A probe re-renders everything it can see once per face,
+            // and the snow mesh alone was turning 1.5M triangles a frame into 15.9M while
+            // adding essentially nothing to a 128px cubemap.
+            int snowLayer = LayerMask.NameToLayer(SnowGroundBuilder.SNOW_LAYER);
+            if (snowLayer >= 0) probe.cullingMask = ~(1 << snowLayer);
 
             if (go.GetComponent<HDAdditionalReflectionData>() == null)
                 go.AddComponent<HDAdditionalReflectionData>();

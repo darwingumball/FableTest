@@ -93,9 +93,15 @@ Shader "Game/SnowGround"
         };
 
         // Mask is authored per-footprint, so bilinear edges are fine and cheap.
+        //
+        // Outside the deformation region this returns 0, not 1. The mesh is a
+        // player-following LOD grid whose outer rings deliberately overhang the region so
+        // the far corner is always covered; without this the overhang would clamp-sample
+        // the edge texel and smear a skirt of snow across ground that has no snow data.
+        // Zero mask means zero thickness, which the fragment clip then discards.
         float SampleMask(float2 uv)
         {
-            if (any(uv < 0.0) || any(uv > 1.0)) return 1.0;
+            if (any(uv < 0.0) || any(uv > 1.0)) return 0.0;
             return saturate(SAMPLE_TEXTURE2D_LOD(_SnowMaskRT, sampler_SnowMaskRT, uv, 0).r);
         }
 
@@ -107,7 +113,29 @@ Shader "Game/SnowGround"
             // Snow actually left standing here, in metres. Drives the clip that exposes
             // the street: where a footprint has carved through, this reaches zero.
             float thickness : TEXCOORD2;
+            // Reconstructed in the VERTEX stage. Doing it per fragment cost four
+            // 9-tap filter evaluations - 36 texture samples for every pixel of a
+            // full-screen ground plane. The mesh is dense enough that interpolating
+            // per-vertex normals is visually equivalent for a fraction of the cost.
+            float3 normalWS : TEXCOORD3;
         };
+
+        float3 ReconstructNormal(float2 uv)
+        {
+            float texel = _SnowDeformTexel * _SmoothRadiusTexels;
+            float dL = SampleDeformSmooth(uv - float2(texel, 0));
+            float dR = SampleDeformSmooth(uv + float2(texel, 0));
+            float dD = SampleDeformSmooth(uv - float2(0, texel));
+            float dU = SampleDeformSmooth(uv + float2(0, texel));
+
+            // Convert the compression gradient into a real world-space slope:
+            // height = -compression * depth, sampled 2 texels apart in metres.
+            float regionSize = 1.0 / max(_SnowRegionParams.z, 1e-6);
+            float worldStep = max(texel * regionSize * 2.0, 1e-4);
+            float2 slope = float2(dR - dL, dU - dD) * _DepthMeters / worldStep;
+
+            return normalize(float3(slope.x * _NormalStrength, 1.0, slope.y * _NormalStrength));
+        }
 
         Varyings SnowVert(Attributes input)
         {
@@ -140,6 +168,7 @@ Shader "Game/SnowGround"
             o.positionWS = positionAWS;   // absolute - fragment re-samples with it
             o.compression = compression;
             o.thickness = lift;
+            o.normalWS = ReconstructNormal(deformUV);
             o.positionCS = TransformWorldToHClip(positionRWS);
             return o;
         }
@@ -164,27 +193,8 @@ Shader "Game/SnowGround"
                 // the ground. Must match the depth pass or depth and colour disagree.
                 clip(input.thickness - _MinThickness);
 
-                // Rebuild the surface normal from the deformation gradient so trail walls
-                // shade differently from flat snow. Step exactly one texel.
-                float2 uv = WorldToDeformUV(input.positionWS);
-                // Match the vertex smoothing radius, otherwise the normals describe a
-                // sharper surface than the geometry actually has and edges look creased.
-                float texel = _SnowDeformTexel * _SmoothRadiusTexels;
-                float dL = SampleDeformSmooth(uv - float2(texel, 0));
-                float dR = SampleDeformSmooth(uv + float2(texel, 0));
-                float dD = SampleDeformSmooth(uv - float2(0, texel));
-                float dU = SampleDeformSmooth(uv + float2(0, texel));
-
-                // Convert the compression gradient into a real world-space slope:
-                // height = -compression * depth, sampled 2 texels apart in metres.
-                float regionSize = 1.0 / max(_SnowRegionParams.z, 1e-6);
-                float worldStep = max(texel * regionSize * 2.0, 1e-4);
-                float2 slope = float2(dR - dL, dU - dD) * _DepthMeters / worldStep;
-
-                float3 normalWS = normalize(float3(
-                    slope.x * _NormalStrength,
-                    1.0,
-                    slope.y * _NormalStrength));
+                // Interpolation denormalises; renormalise before lighting.
+                float3 normalWS = normalize(input.normalWS);
 
                 float3 lightDir = normalize(-_GameSunDirection.xyz);
                 // Wrapped lambert keeps the shadowed side readable instead of pure black.

@@ -22,9 +22,13 @@ namespace Game.Player
         [SerializeField] private float walkSpeed = 4.5f;
         [SerializeField] private float sprintSpeed = 7f;
         [SerializeField] private float crouchSpeed = 2.2f;
-        [Tooltip("Ground acceleration (m/s^2). High values feel responsive rather than icy.")]
+        [Tooltip("Horizontal velocity snaps straight to the input on the ground - no " +
+                 "ramp in, no slide out. Any acceleration ramp reads as inertia when " +
+                 "strafing, because reversing direction is a full 2x speed change.")]
+        [SerializeField] private bool instantGroundControl = true;
+        [Tooltip("Ground acceleration (m/s^2), used only when instantGroundControl is off.")]
         [SerializeField] private float acceleration = 60f;
-        [Tooltip("Ground deceleration when input is released.")]
+        [Tooltip("Ground deceleration when input is released. Unused when instant.")]
         [SerializeField] private float deceleration = 70f;
         [Tooltip("Acceleration while airborne - low keeps jumps committal.")]
         [SerializeField] private float airAcceleration = 12f;
@@ -177,10 +181,19 @@ namespace Game.Player
             if (wishDir.sqrMagnitude > 1f) wishDir.Normalize();
             Vector3 targetHorizontal = wishDir * targetSpeed;
 
-            // Separate accel/decel/air rates: stopping should be crisp, air control limited.
-            float rate = !grounded ? airAcceleration
-                : (wishDir.sqrMagnitude > 0.01f ? acceleration : deceleration);
-            Vector3 horizontal = Vector3.MoveTowards(HorizontalVelocity, targetHorizontal, rate * Time.deltaTime);
+            Vector3 horizontal;
+            if (grounded && instantGroundControl)
+            {
+                // Snap. Airborne movement still ramps, so a jump stays committal - that
+                // reads as momentum you chose, not as the controller lagging your input.
+                horizontal = targetHorizontal;
+            }
+            else
+            {
+                float rate = !grounded ? airAcceleration
+                    : (wishDir.sqrMagnitude > 0.01f ? acceleration : deceleration);
+                horizontal = Vector3.MoveTowards(HorizontalVelocity, targetHorizontal, rate * Time.deltaTime);
+            }
             _velocity.x = horizontal.x;
             _velocity.z = horizontal.z;
 
