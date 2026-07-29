@@ -80,18 +80,17 @@ namespace Game.Editor
             var deckWood = TestMaterials.Lit("TB_Deck", new Color(0.30f, 0.24f, 0.17f), 0.20f, 0f);
             var trim = TestMaterials.Lit("TB_Trim", new Color(0.12f, 0.13f, 0.16f), 0.55f, 0.6f);
 
-            // Wake pieces. The bow wave lifts the water; the foam box paints the trail. They
-            // are separate because HDRP's bow-wave shape writes deformation only, and foam
-            // is what actually persists behind a moving hull.
+            // Wake pieces. The bow wave lifts the water in front of the hull; the prop wash
+            // churns and foams behind it. They are separate because HDRP's bow-wave shape
+            // writes deformation only, and foam is what actually persists into a trail.
             var bowWave = DecalMaterial("TB_BowWave", DECAL_BOW_WAVE, deformation: true, foam: false,
                 m => m.SetFloat("_Elevation", 1f));
-            var wakeFoam = DecalMaterial("TB_WakeFoam", DECAL_BOX, deformation: false, foam: true,
-                m => {
-                    // Blend distances are fractions of the half-size, so the foam fades out
-                    // toward the edges instead of ending on a hard rectangle.
-                    m.SetVector("_Blend_Distance", new Vector4(0.55f, 0.4f, 0f, 0f));
-                    m.SetFloat("_Cubic_Blend", 1f);
-                });
+            // Propeller wash. A SPHERE, not a box: the box read as an obvious rectangle
+            // dragged across the water, because that is exactly what it was. A narrow
+            // elongated blob at the stern smears into a proper churned lane instead, and it
+            // does both jobs - it disturbs the surface as well as foaming it, which is what
+            // makes the water behind a boat look worked rather than painted.
+            var propWash = DecalMaterial("TB_PropWash", DECAL_SPHERE, deformation: true, foam: true);
             var ripple = DecalMaterial("TB_FlotsamRipple", DECAL_SPHERE, deformation: true, foam: true);
 
             var scene = EditorSceneManager.OpenScene(WORLD_SCENE, OpenSceneMode.Additive);
@@ -105,7 +104,7 @@ namespace Game.Editor
             BuildWaterSurface(root.transform);
             BuildShore(root.transform, sand, wetRock);
             BuildFloatingProps(root.transform, deckWood, ripple);
-            BuildBoat(scene, hullPaint, deckWood, trim, bowWave, wakeFoam);
+            BuildBoat(scene, hullPaint, deckWood, trim, bowWave, propWash);
 
             EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene, WORLD_SCENE);
@@ -244,11 +243,11 @@ namespace Game.Editor
         /// Attaches a decal. Position is in the parent's local space; only XZ matters, since
         /// a decal is projected straight down onto the water.
         /// </summary>
-        private static void AddDecal(Transform parent, string name, Material material,
+        private static WaterDecal AddDecal(Transform parent, string name, Material material,
                                      Vector3 localPos, Vector2 regionSize, float amplitude,
                                      float surfaceFoam = 1f, float deepFoam = 1f)
         {
-            if (material == null) return;
+            if (material == null) return null;
 
             var go = new GameObject(name);
             go.transform.SetParent(parent, false);
@@ -267,6 +266,7 @@ namespace Game.Editor
             // The shape is procedural and static; only the transform moves, so the atlas
             // entry needs rendering once rather than every frame.
             decal.updateMode = UnityEngine.CustomRenderTextureUpdateMode.OnLoad;
+            return decal;
         }
 
         /// <summary>
@@ -477,8 +477,8 @@ namespace Game.Editor
                 // the crate; pushed along by the swell it smears into a short trail, which
                 // is exactly what a half-submerged box adrift should do.
                 AddDecal(crate.transform, "Ripple", ripple, Vector3.zero,
-                    new Vector2(2.6f, 2.6f), amplitude: 0.09f,
-                    surfaceFoam: 0.7f, deepFoam: 0.35f);
+                    new Vector2(2.1f, 2.1f), amplitude: 0.05f,
+                    surfaceFoam: 0.22f, deepFoam: 0.1f);
             }
         }
 
@@ -487,7 +487,7 @@ namespace Game.Editor
         /// pitching and rolling. See <see cref="BoatMotion"/> for why they are separate.
         /// </summary>
         private static void BuildBoat(Scene scene, Material hullPaint, Material deck, Material trim,
-                                      Material bowWave, Material wakeFoam)
+                                      Material bowWave, Material propWash)
         {
             var boat = new GameObject(BOAT_NAME);
             SceneManager.MoveGameObjectToScene(boat, scene);
@@ -567,17 +567,29 @@ namespace Game.Editor
             var helm = BuildHelm(boat.transform, trim, deck);
             BuildLadder(boat.transform, trim);
 
-            // Wake. Both hang off the LEVEL root, so they stay square to the water while the
-            // hull rolls - a decal is projected straight down, and letting it roll with the
-            // visual would swing the wake out from under the boat.
-            AddDecal(boat.transform, "BowWave", bowWave, new Vector3(0f, 0f, 5.5f),
-                new Vector2(7.5f, 9f), amplitude: 0.55f);
-            // Wider and much longer than the hull, centred aft. The trail itself comes from
-            // foam persistence rather than from this shape; the box is only the source that
-            // keeps stamping while the boat moves out from under what it already laid down.
-            AddDecal(boat.transform, "WakeFoam", wakeFoam, new Vector3(0f, 0f, -2f),
-                new Vector2(7f, 20f), amplitude: 0f,
-                surfaceFoam: 1f, deepFoam: 0.75f);
+            // Wake. Both hang off the LEVEL root, so they stay square to the water while
+            // the hull rolls - a decal is projected straight down, and letting it roll with
+            // the visual would swing the wake out from under the boat.
+            var bowDecal = AddDecal(boat.transform, "BowWave", bowWave, new Vector3(0f, 0f, 5.5f),
+                new Vector2(7.5f, 9f), amplitude: 0.5f);
+
+            // Narrow and behind the transom, roughly a propeller's width. The long trail is
+            // not this shape - it comes from foam persistence smearing this source across
+            // the water as the boat pulls away from what it just laid down.
+            var washDecal = AddDecal(boat.transform, "PropWash", propWash, new Vector3(0f, 0f, -7.5f),
+                new Vector2(2.6f, 7f), amplitude: 0.22f,
+                surfaceFoam: 1f, deepFoam: 0.7f);
+
+            // Both are driven to zero at rest by BoatWake; the values above are the
+            // full-speed strengths it scales toward.
+            var wake = boat.AddComponent<BoatWake>();
+            var wso = new SerializedObject(wake);
+            wso.FindProperty("bowWave").objectReferenceValue = bowDecal;
+            wso.FindProperty("propWash").objectReferenceValue = washDecal;
+            wso.FindProperty("fullEffectSpeed").floatValue = 6f;
+            wso.FindProperty("bowAmplitude").floatValue = 0.5f;
+            wso.FindProperty("washAmplitude").floatValue = 0.22f;
+            wso.ApplyModifiedPropertiesWithoutUndo();
 
             var motion = boat.AddComponent<BoatMotion>();
             var so = new SerializedObject(motion);

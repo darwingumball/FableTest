@@ -77,6 +77,14 @@ namespace Game.World
         /// <summary>Yaw change in degrees this frame. Read by <see cref="BoatRiderCarry"/>.</summary>
         public float LastFrameYawDelta { get; private set; }
 
+        /// <summary>
+        /// Horizontal speed in m/s, lightly smoothed. Derived from actual movement rather
+        /// than from the helm, so it is correct on autopilot, under power, and while
+        /// coasting, and it is right on every peer - a client reads the speed of the hull it
+        /// is actually seeing. Drives <see cref="BoatWake"/>.
+        /// </summary>
+        public float Speed { get; private set; }
+
         private float _heave;
         private float _pitch;
         private float _roll;
@@ -190,6 +198,12 @@ namespace Game.World
 
             LastFrameDelta = transform.position - previousPosition;
             LastFrameYawDelta = Mathf.DeltaAngle(previousYaw, transform.eulerAngles.y);
+
+            // Horizontal only: heave is the boat riding a wave, not making way, and
+            // counting it would leave a wake behind a boat sitting still in a swell.
+            float dt = Mathf.Max(Time.deltaTime, 1e-5f);
+            float instant = new Vector2(LastFrameDelta.x, LastFrameDelta.z).magnitude / dt;
+            Speed = Mathf.Lerp(Speed, instant, 1f - Mathf.Exp(-6f * dt));
         }
 
         /// <summary>
