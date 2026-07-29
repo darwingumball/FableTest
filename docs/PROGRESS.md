@@ -121,9 +121,16 @@ event id, server applies the change) or from the console: `weather <type> [secon
 
 **Why order matters:** `Build Menus` REGENERATES the WorldUI/MainMenuUI prefabs from
 scratch, wiping the subtrees added by `Build Inventory UI` (TabMenu), `Build Quests`
-(quest log), `Build Console`, `Build HUD` (health/clock) and `Build Map And Toasts`
-(map + toast stack). Those five patch the existing prefab, so re-run them in order after
-any `Build Menus`. All generators are individually idempotent.
+(quest log), `Build Console`, `Build Chat`, `Build HUD` (health/clock) and
+`Build Map And Toasts` (map + toast stack). Those SIX patch the existing prefab, so re-run
+them in order after any `Build Menus`. All generators are individually idempotent.
+
+**This has already bitten once (2026-07-29).** The main-menu work ran `Build Menus` and the
+patchers were not re-run, so Tab, M, Enter and backquote all silently did nothing in the
+World scene for a whole session — the actions and bindings were fine, the UI subtrees simply
+were not there. **The symptom is dead hotkeys, not an error**, and nothing logs. If a UI
+hotkey stops responding, check `WorldUI`'s children before touching input: a healthy one has
+HUD, TabMenuRoot, PausePanel, SettingsPanel, ConsoleRoot and ChatRoot.
 
 Note: `Build Map And Toasts` also links the scene's WorldUI instance to the scene's
 MapCamera — prefabs cannot store scene references, so that link lives on the instance.

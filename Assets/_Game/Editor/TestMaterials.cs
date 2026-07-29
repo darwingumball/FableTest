@@ -14,6 +14,13 @@ namespace Game.Editor
     {
         public const string MAT_FOLDER = "Assets/_Game/Materials/Test";
 
+        /// <summary>
+        /// Shadows stop being rendered past this multiple of a light's own range. Six is
+        /// well beyond where a shadow carries any detail and far enough that you never catch
+        /// it dropping out.
+        /// </summary>
+        public const float SHADOW_FADE_RANGE_MULTIPLE = 6f;
+
         // ------------------------------------------------------------------ materials
 
         public static Material Lit(string name, Color baseColor, float smoothness, float metallic)
@@ -127,6 +134,16 @@ namespace Game.Editor
             // haze around the neon, which is most of the look.
             hd.affectsVolumetric = true;
             hd.volumetricDimmer = volumetric;
+
+            // HDRP defaults every fade distance to 10000, i.e. never. A 24 m work light was
+            // still re-rendering its shadow map while you looked at it from 300 m out at sea,
+            // for a lit patch a few pixels across.
+            //
+            // Only the SHADOW fades. The light itself deliberately does not: lighting is
+            // view-independent, so culling it by camera distance would visibly darken the
+            // town as you sail away, which is a look change and not an optimisation. A shadow
+            // at six times the light's own range carries no information.
+            if (shadows) hd.shadowFadeDistance = range * SHADOW_FADE_RANGE_MULTIPLE;
 
             // PracticalLight owns the intensity from here: day/night response plus live
             // console scaling by group.
