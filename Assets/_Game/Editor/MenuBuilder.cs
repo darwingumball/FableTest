@@ -1,3 +1,4 @@
+using System.IO;
 using Game.UI;
 using TMPro;
 using UnityEditor;
@@ -33,12 +34,22 @@ namespace Game.Editor
         private static readonly Color TextCol = new(0.85f, 0.85f, 0.80f, 1f);
         private static readonly Color DimText = new(0.55f, 0.55f, 0.52f, 1f);
         private static readonly Color Accent = new(0.58f, 0.66f, 0.55f, 1f);
+        /// <summary>Title colour. Light rather than blood red - it has to sit on a dark
+        /// night scene and stay legible without glowing like an error message.</summary>
+        private static readonly Color TitleCol = new(0.93f, 0.42f, 0.40f, 1f);
+        private const string SCRIM_PATH = UI_FOLDER + "/MenuScrim.png";
+
+        /// <summary>Menu typeface, resolved once per build. Null falls back to the TMP default.</summary>
+        private static TMP_FontAsset _font;
 
         [MenuItem("Game/Setup/Build Menus")]
         public static void Build()
         {
+            if (!MenuSceneBuilder.Ready("MenuBuilder")) return;
+
             EnsureTmpEssentials();
             EnsureFolder(UI_FOLDER);
+            _font = MenuFont.Ensure();
 
             var actions = AssetDatabase.LoadAssetAtPath<InputActionAsset>(INPUT_ACTIONS_PATH);
             if (actions == null)
@@ -212,15 +223,24 @@ namespace Game.Editor
             var canvasGo = CanvasRoot("MainMenuUI");
 
             // --- Title screen ---
-            var (title, titleCol) = Screen("TitleScreen", 480, canvasGo.transform);
-            var titleText = Text(titleCol, "GameTitle", "F A B L E", 88, TextAlignmentOptions.Center);
-            titleText.color = TextCol;
-            Text(titleCol, "Subtitle", "a cold place", 20, TextAlignmentOptions.Center).color = DimText;
+            // The only screen that is NOT an opaque panel: it sits over the live harbour in
+            // the MainMenu scene, so it gets a left-hand scrim for legibility and leaves the
+            // right two thirds of the frame to the water, the pier and the boat.
+            var (title, titleCol) = Screen("TitleScreen", 460, canvasGo.transform, showcase: true);
+
+            var titleText = Text(titleCol, "GameTitle", "F A B L E", 88, TextAlignmentOptions.Left);
+            titleText.color = TitleCol;
+            Text(titleCol, "Subtitle", "a cold place", 20, TextAlignmentOptions.Left).color = DimText;
             Spacer(titleCol, 40);
-            var (playB, _) = TextButton(titleCol, "PlayButton", "Play", 0, 54);
-            var (joinB, _) = TextButton(titleCol, "JoinButton", "Join Game", 0, 54);
-            var (setB, _) = TextButton(titleCol, "SettingsButton", "Settings", 0, 54);
-            var (quitB, _) = TextButton(titleCol, "QuitButton", "Quit", 0, 54);
+            var (playB, playL) = TextButton(titleCol, "PlayButton", "Play", 320, 54);
+            var (joinB, joinL) = TextButton(titleCol, "JoinButton", "Join Game", 320, 54);
+            var (setB, setL) = TextButton(titleCol, "SettingsButton", "Settings", 320, 54);
+            var (quitB, quitL) = TextButton(titleCol, "QuitButton", "Quit", 320, 54);
+            foreach (var label in new[] { playL, joinL, setL, quitL })
+            {
+                label.alignment = TextAlignmentOptions.Left;
+                label.margin = new Vector4(20f, 0f, 0f, 0f);
+            }
 
             // --- Save slots screen ---
             var (slots, slotsCol) = Screen("SaveSlotsScreen", 700, canvasGo.transform);
@@ -443,19 +463,48 @@ namespace Game.Editor
             return go;
         }
 
-        /// <summary>Full-stretch dark screen with a centered fixed-width column layout.</summary>
-        private static (GameObject root, Transform column) Screen(string name, float columnWidth, Transform parent = null)
+        /// <summary>
+        /// Full-stretch dark screen with a centered fixed-width column layout.
+        ///
+        /// <paramref name="showcase"/> makes it see-through instead: no flat background, a
+        /// gradient scrim down the left edge, and the column pinned left-of-centre. That is
+        /// the title screen, which has a lit 3D harbour behind it.
+        /// </summary>
+        private static (GameObject root, Transform column) Screen(
+            string name, float columnWidth, Transform parent = null, bool showcase = false)
         {
             var root = new GameObject(name, typeof(Image));
             if (parent != null) root.transform.SetParent(parent, false);
-            root.GetComponent<Image>().color = ScreenBg;
+            var backdrop = root.GetComponent<Image>();
             Stretch(root.GetComponent<RectTransform>());
+
+            if (showcase)
+            {
+                backdrop.color = Color.clear;
+                // A fully transparent Image still swallows clicks, which would make every
+                // button under it dead.
+                backdrop.raycastTarget = false;
+                BuildScrim(root.transform);
+            }
+            else
+            {
+                backdrop.color = ScreenBg;
+            }
 
             var column = new GameObject("Column", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
             column.transform.SetParent(root.transform, false);
             var rt = column.GetComponent<RectTransform>();
-            rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
-            rt.pivot = new Vector2(0.5f, 0.5f);
+            if (showcase)
+            {
+                rt.anchorMin = rt.anchorMax = new Vector2(0f, 0.5f);
+                rt.pivot = new Vector2(0f, 0.5f);
+                rt.anchoredPosition = new Vector2(150f, 0f);
+            }
+            else
+            {
+                rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
+                rt.pivot = new Vector2(0.5f, 0.5f);
+            }
             rt.sizeDelta = new Vector2(columnWidth, 0);
             var layout = column.GetComponent<VerticalLayoutGroup>();
             layout.spacing = 14;
@@ -466,6 +515,65 @@ namespace Game.Editor
             column.GetComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
             return (root, column.transform);
+        }
+
+        /// <summary>
+        /// Left-edge darkening so white text stays readable over moonlit water. UGUI cannot
+        /// draw a gradient without a sprite, so one is generated: a wide, short alpha ramp
+        /// stretched over the left half of the screen.
+        /// </summary>
+        private static void BuildScrim(Transform parent)
+        {
+            var go = new GameObject("Scrim", typeof(Image));
+            go.transform.SetParent(parent, false);
+
+            var rt = go.GetComponent<RectTransform>();
+            rt.anchorMin = new Vector2(0f, 0f);
+            rt.anchorMax = new Vector2(0.58f, 1f);
+            rt.offsetMin = rt.offsetMax = Vector2.zero;
+
+            var image = go.GetComponent<Image>();
+            image.sprite = EnsureScrimSprite();
+            image.type = Image.Type.Simple;
+            image.color = new Color(0.02f, 0.02f, 0.03f, 0.94f);
+            image.raycastTarget = false;
+        }
+
+        private static Sprite EnsureScrimSprite()
+        {
+            var existing = AssetDatabase.LoadAssetAtPath<Sprite>(SCRIM_PATH);
+            if (existing != null) return existing;
+
+            // 128x4: horizontal ramp only, so it costs nothing and stretches cleanly.
+            const int width = 128;
+            var tex = new Texture2D(width, 4, TextureFormat.RGBA32, false, linear: false);
+            var pixels = new Color32[width * 4];
+            for (int x = 0; x < width; x++)
+            {
+                // Opaque for the first third, then eased out - a linear fade reads as a
+                // visible hard edge where it meets the scene.
+                float t = Mathf.InverseLerp(0.34f, 1f, (x + 0.5f) / width);
+                byte a = (byte)Mathf.RoundToInt((1f - Mathf.SmoothStep(0f, 1f, t)) * 255f);
+                for (int y = 0; y < 4; y++) pixels[y * width + x] = new Color32(255, 255, 255, a);
+            }
+            tex.SetPixels32(pixels);
+            tex.Apply();
+
+            File.WriteAllBytes(Path.Combine(Directory.GetCurrentDirectory(), SCRIM_PATH),
+                               tex.EncodeToPNG());
+            Object.DestroyImmediate(tex);
+            AssetDatabase.ImportAsset(SCRIM_PATH, ImportAssetOptions.ForceUpdate);
+
+            var importer = (TextureImporter)AssetImporter.GetAtPath(SCRIM_PATH);
+            importer.textureType = TextureImporterType.Sprite;
+            importer.spriteImportMode = SpriteImportMode.Single;
+            importer.alphaIsTransparency = true;
+            importer.mipmapEnabled = false;
+            importer.wrapMode = TextureWrapMode.Clamp;
+            importer.textureCompression = TextureImporterCompression.Uncompressed;
+            importer.SaveAndReimport();
+
+            return AssetDatabase.LoadAssetAtPath<Sprite>(SCRIM_PATH);
         }
 
         private static Transform Column(Transform parent, string name, float spacing)
@@ -503,6 +611,7 @@ namespace Game.Editor
             var go = new GameObject(name, typeof(TextMeshProUGUI));
             go.transform.SetParent(parent, false);
             var tmp = go.GetComponent<TextMeshProUGUI>();
+            if (_font != null) tmp.font = _font;
             tmp.text = text;
             tmp.fontSize = size;
             tmp.color = TextCol;
@@ -726,6 +835,14 @@ namespace Game.Editor
 
         private static GameObject SavePrefab(GameObject root, string path)
         {
+            // Single choke point for the typeface. Text() covers what this builder authors
+            // itself, but dropdowns, input fields and scroll lists come from
+            // DefaultControls with the TMP default font already baked in, and they only
+            // pass through here.
+            if (_font != null)
+                foreach (var tmp in root.GetComponentsInChildren<TMP_Text>(true))
+                    tmp.font = _font;
+
             var saved = PrefabUtility.SaveAsPrefabAsset(root, path);
             Object.DestroyImmediate(root);
             return saved;

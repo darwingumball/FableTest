@@ -321,6 +321,19 @@ MapCamera — prefabs cannot store scene references, so that link lives on the i
     inherits visible judder at speed. Damp heave harder than tilt — heave is what riders
     stand on, roll is free because it only ever touches the visual hull.
 
+39. **Builders must refuse to run in PLAY MODE, not just during compiles.**
+    `EditorSceneManager.OpenScene` throws in play mode, so the builder does nothing at all
+    while the scene on screen looks untouched and entirely plausible — worse than gotcha 29,
+    where at least stale code ran. `MenuSceneBuilder.Ready()` is the shared guard; every
+    builder should call it.
+
+40. **A night sky is a property of the light marked `interactsWithSky`, not of intensity.**
+    `PhysicallyBasedSky` takes all its scattering from that one light; aim it from above the
+    horizon and you get a blue daytime sky no matter how dim it is. Aim the sky light from
+    *below* the horizon (the sun has set) and add a second directional light with
+    `interactsWithSky = false` for the moonlight. Same two-light split as the world's moon
+    (gotcha 26), for the opposite reason.
+
 
 ## Performance: measured, not assumed (2026-07-28)
 

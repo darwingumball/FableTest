@@ -33,6 +33,9 @@ namespace Game.World
         [SerializeField] private BoatHelm helm;
 
         [Header("Course (pure function of server time)")]
+        [Tooltip("Moored: hold the authored position and heading and only respond to the " +
+                 "waves. Used by the main menu harbour, where the boat is scenery.")]
+        [SerializeField] private bool moored;
         [Tooltip("Centre of the patrol circle, world space.")]
         [SerializeField] private Vector3 courseCentre = new(0f, 0f, 150f);
         [SerializeField] private float courseRadius = 38f;
@@ -73,6 +76,11 @@ namespace Game.World
         private float _pitch;
         private float _roll;
         private bool _initialised;
+        private Pose _mooring;
+
+        // Captured before the first LateUpdate overwrites the transform with the wave
+        // response - after that there is no record of where the boat was authored.
+        private void Awake() => _mooring = new Pose(transform.position, transform.rotation);
 
         private void LateUpdate()
         {
@@ -86,7 +94,12 @@ namespace Game.World
             Vector3 target;
             Vector3 tangent;
 
-            if (helm != null && helm.HasControl)
+            if (moored)
+            {
+                target = _mooring.position;
+                tangent = _mooring.rotation * Vector3.forward;
+            }
+            else if (helm != null && helm.HasControl)
             {
                 // Driven: the server integrates the hull and every peer eases onto the
                 // replicated result. See BoatHelm for why this cannot stay a function of
