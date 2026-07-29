@@ -1,0 +1,21 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c7aab21e92c67874f882a5a559d3e438, type: 3}
+  m_Name: weather_Rain
+  m_EditorClassIdentifier: 
+  type: 3
+  volumeProfile: {fileID: 11400000, guid: ff4ffff7abdba344d8449a4aa74b5413, type: 2}
+  rainRate: 900
+  snowRate: 0
+  windStrength: 0.4
+  snowAccumulationRate: 0
+  lightning: 0
