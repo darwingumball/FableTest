@@ -224,7 +224,8 @@ namespace Game.Net
             _fog.maximumHeight.value = Mathf.Lerp(from.fogMaximumHeight, to.fogMaximumHeight, k);
 
             // --- clouds ---
-            bool cloudsOn = (k < 0.5f ? from.cloudsEnabled : to.cloudsEnabled);
+            bool cloudsOn = (k < 0.5f ? from.cloudsEnabled : to.cloudsEnabled)
+                            && !Admin.PerfProbe.SuppressClouds;
             _clouds.enable.value = cloudsOn;
             if (cloudsOn)
             {

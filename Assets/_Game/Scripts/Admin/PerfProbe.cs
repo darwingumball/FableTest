@@ -99,6 +99,7 @@ namespace Game.Admin
                 case "lights": return probe.SetLights(on);
                 case "shadows": return probe.SetShadows(on);
                 case "fog": return probe.SetVolumeComponent<Fog>(on, "fog");
+                case "clouds": return probe.SetClouds(on);
                 case "post": return probe.SetVolumeComponent<PSXPostProcess>(on, "post");
                 case "sky": return probe.SetVolumeComponent<PhysicallyBasedSky>(on, "sky");
                 case "water": return probe.SetWater(on);
@@ -108,7 +109,7 @@ namespace Game.Admin
         }
 
         private const string Usage =
-            "usage: perf | perf reset | perf <lights|shadows|fog|post|sky|water|snow> on|off";
+            "usage: perf | perf reset | perf <lights|shadows|fog|clouds|post|sky|water|snow> on|off";
 
         private string Report()
         {
@@ -212,6 +213,35 @@ namespace Game.Admin
             return $"{key} {(on ? "on" : "off")} ({hits} volume(s))";
         }
 
+        /// <summary>
+        /// Volumetric clouds specifically, separate from fog. WeatherManager rebuilds its
+        /// runtime profile from the preset every frame, so flipping the override alone is
+        /// overwritten immediately - the suppression flag is what actually holds.
+        /// </summary>
+        private string SetClouds(bool on)
+        {
+            SuppressClouds = !on;
+            int hits = 0;
+            foreach (var v in FindObjectsByType<Volume>(FindObjectsSortMode.None))
+            {
+                if (v.profile == null) continue;
+                if (!v.profile.TryGet(out VolumetricClouds clouds)) continue;
+                clouds.enable.value = on;
+                hits++;
+            }
+            if (on) _off.Remove("clouds"); else _off.Add("clouds");
+            return $"volumetric clouds {(on ? "on" : "off")} ({hits} volume(s))";
+        }
+
+        /// <summary>
+        /// Read by <see cref="Game.Net.WeatherManager"/> so its per-frame rewrite does not
+        /// undo the toggle above.
+        /// </summary>
+        public static bool SuppressClouds { get; private set; }
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetSuppression() => SuppressClouds = false;
+
         private string SetWater(bool on)
         {
             int hits = 0;
@@ -256,6 +286,7 @@ namespace Game.Admin
             SetVolumeComponent<Fog>(true, "fog");
             SetVolumeComponent<PSXPostProcess>(true, "post");
             SetVolumeComponent<PhysicallyBasedSky>(true, "sky");
+            SetClouds(true);
             SetWater(true);
             SetRenderers(true, "snow", "SnowGround");
             _off.Clear();

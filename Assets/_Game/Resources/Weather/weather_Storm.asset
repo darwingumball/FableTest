@@ -15,17 +15,17 @@ MonoBehaviour:
   type: 4
   fogMeanFreePath: 110
   volumetricFog: 1
-  fogDepthExtent: 110
+  fogDepthExtent: 64
   fogAlbedo: {r: 0.75, g: 0.78, b: 0.82, a: 1}
   fogAnisotropy: 0.6
   fogMaximumHeight: 80
   dayExposure: 13.5
   cloudsEnabled: 1
-  cloudDensity: 1
+  cloudDensity: 0.48
   cloudShapeFactor: 0.38
   cloudErosion: 0.28
   cloudAltitude: 480
-  cloudThickness: 4200
+  cloudThickness: 2000
   cloudSunDimmer: 0.22
   cloudWindSpeed: 75
   rainRate: 1800
