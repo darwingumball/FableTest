@@ -345,6 +345,21 @@ MapCamera — prefabs cannot store scene references, so that link lives on the i
     disk and *then* hit the null session, so a failed start still left a slot behind.
     Validate first, write second.
 
+43. **Water decals only render inside a finite region, and it defaults to the WORLD ORIGIN.**
+    HDRP centres the decal region on `Camera.main` and falls back to (0,0) when nothing
+    carries the MainCamera tag — silently, and it looks exactly like broken decals. With a
+    200 m region at the origin, the only crate that ever foamed was the one at z=96; the
+    boat at z=106+ never did. `WaterVolume` now re-anchors `decalRegionAnchor` to the local
+    player, which also beats relying on the tag: every peer has a player camera and
+    `Camera.main` returns whichever tagged one it finds first.
+
+44. **Foam is a separate shader pass from deformation.** It multiplies by the foam dimmers,
+    NOT by amplitude — so `amplitude = 0` on a foam-only decal is correct, not a no-op. The
+    `_TYPE` numbering is shared between both paths (0 sphere/disk, 1 box/rectangle,
+    4 texture), so a foam rectangle is `_TYPE 1` with `_AffectDeformation` off. And the
+    trail is not authored: the foam buffer decays instead of being redrawn, so a moving
+    foam source leaves a fading line — `foamPersistenceMultiplier` IS the wake length.
+
 
 ## Performance: measured, not assumed (2026-07-28)
 

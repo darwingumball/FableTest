@@ -1,3 +1,4 @@
+using Game.Net;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.Rendering.HighDefinition;
@@ -33,6 +34,7 @@ namespace Game.World
         [SerializeField] private float searchError = 0.01f;
 
         private WaterSurface _surface;
+        private Transform _decalAnchor;
 
         /// <summary>Approximate still-water level, for cheap "am I under water at all" tests.</summary>
         public float BaseLevel => transform.position.y;
@@ -62,6 +64,35 @@ namespace Game.World
             var net = NetworkManager.Singleton;
             double t = net != null && net.IsListening ? net.ServerTime.Time : Time.timeAsDouble;
             _surface.simulationTime = (float)(t * timeScale);
+
+            UpdateDecalAnchor();
+        }
+
+        /// <summary>
+        /// Keeps the wake/foam region centred on the local player.
+        ///
+        /// Decals only render inside a finite region, and HDRP centres it on
+        /// <c>Camera.main</c> - falling back to the WORLD ORIGIN when nothing carries the
+        /// MainCamera tag. That fallback is silent and looks exactly like broken decals:
+        /// with a 200 m region at the origin, the only things that ever foamed were the one
+        /// crate inside it, and the boat - out at z=106 and beyond - never did.
+        ///
+        /// Pointing the anchor at the player directly is better than relying on the tag
+        /// anyway: in a networked game every peer has a player camera, and Camera.main
+        /// returns whichever tagged one it finds first.
+        /// </summary>
+        private void UpdateDecalAnchor()
+        {
+            // Re-acquires by itself when the player despawns, because the destroyed
+            // Transform compares equal to null.
+            if (_decalAnchor != null) return;
+
+            var local = NetworkPlayer.Local;
+            if (local == null) return;
+
+            var cam = local.GetComponentInChildren<Camera>();
+            _decalAnchor = cam != null ? cam.transform : local.transform;
+            _surface.decalRegionAnchor = _decalAnchor;
         }
 
         /// <summary>

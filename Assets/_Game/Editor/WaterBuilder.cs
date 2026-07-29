@@ -193,10 +193,16 @@ namespace Game.Editor
             surface.foamResolution = WaterSurface.WaterDecalRegionResolution.Resolution512;
             surface.deformationRes = WaterSurface.WaterDecalRegionResolution.Resolution512;
 
-            // The decal region follows the main camera (decalRegionAnchor stays null), so
-            // this only needs to cover what is on screen, not the 1.2 km of water. 200 m at
-            // 512 is ~0.4 m per texel, which is about as fine as a PSX-resolution wake needs.
-            surface.decalRegionSize = new Vector2(200f, 200f);
+            // The region only needs to cover what is on screen, not the 1.2 km of water.
+            // 300 m at 512 is ~0.6 m per texel, fine enough for a PSX-resolution wake, and
+            // wide enough that the boat's whole patrol circle stays inside it while the
+            // player watches from the beach.
+            //
+            // WaterVolume re-anchors this to the local player at runtime. Left alone, HDRP
+            // centres it on Camera.main and silently falls back to the WORLD ORIGIN when
+            // nothing is tagged - which put the boat and six of the seven crates outside
+            // the region entirely, so they never foamed.
+            surface.decalRegionSize = new Vector2(300f, 300f);
         }
 
         /// <summary>
