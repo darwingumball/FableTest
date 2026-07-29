@@ -39,8 +39,15 @@ namespace Game.UI
             statusLabel.text = "Searching for games...";
             try
             {
+                var session = NetworkSessionManager.Require();
+                if (session == null)
+                {
+                    statusLabel.text = NetworkSessionManager.NoSessionMessage;
+                    return;
+                }
+
                 await NetworkBootstrap.EnsureInitializedAsync();
-                var response = await NetworkSessionManager.Instance.Lobby.QueryAsync();
+                var response = await session.Lobby.QueryAsync();
                 ClearList();
                 if (response.Results == null || response.Results.Count == 0)
                 {
@@ -53,7 +60,7 @@ namespace Game.UI
                     var row = Instantiate(lobbyRowPrefab, listContainer);
                     var captured = lobby;
                     row.Bind($"{lobby.Name}   {lobby.Players.Count}/{lobby.MaxPlayers}",
-                        () => Join(() => NetworkSessionManager.Instance.JoinByLobbyAsync(captured)));
+                        () => Join(() => session.JoinByLobbyAsync(captured)));
                 }
             }
             catch (System.Exception ex)
@@ -66,7 +73,14 @@ namespace Game.UI
         private void OnJoinByCode()
         {
             if (string.IsNullOrWhiteSpace(codeInput.text)) return;
-            Join(() => NetworkSessionManager.Instance.JoinByCodeAsync(codeInput.text));
+
+            var session = NetworkSessionManager.Require();
+            if (session == null)
+            {
+                statusLabel.text = NetworkSessionManager.NoSessionMessage;
+                return;
+            }
+            Join(() => session.JoinByCodeAsync(codeInput.text));
         }
 
         private async void Join(System.Func<System.Threading.Tasks.Task<bool>> joinFunc)

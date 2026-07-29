@@ -69,6 +69,15 @@ namespace Game.UI
 
         private async void OnStartClicked()
         {
+            // Checked before anything is written to disk: without this the click died on a
+            // bare NullReferenceException, AND it had already created the save slot.
+            var session = NetworkSessionManager.Require();
+            if (session == null)
+            {
+                statusLabel.text = NetworkSessionManager.NoSessionMessage;
+                return;
+            }
+
             var config = new GameConfig
             {
                 sessionName = string.IsNullOrWhiteSpace(nameInput.text) ? $"Game {_slot + 1}" : nameInput.text.Trim(),
@@ -91,7 +100,7 @@ namespace Game.UI
             statusLabel.text = config.visibility == SessionVisibility.Solo
                 ? "Starting..." : "Creating lobby...";
 
-            bool ok = await NetworkSessionManager.Instance.StartSessionAsync(config);
+            bool ok = await session.StartSessionAsync(config);
             if (!ok)
             {
                 statusLabel.text = "Failed to start session — see console.";

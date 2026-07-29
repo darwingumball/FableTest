@@ -334,6 +334,17 @@ MapCamera — prefabs cannot store scene references, so that link lives on the i
     `interactsWithSky = false` for the moonlight. Same two-light split as the world's moon
     (gotcha 26), for the opposite reason.
 
+41. **Play mode MUST start from Boot.** `NetworkSessionManager` is authored in Boot and
+    survives on DontDestroyOnLoad, so pressing Play while MainMenu or World is the open
+    scene skips it — and every start/join button then died on a bare
+    `NullReferenceException` naming only the UI line. `NetworkSessionManager.Require()`
+    now reports the real cause; never dereference `Instance` blind. Corollary for tooling:
+    anything that opens a scene must put Boot back when it is done.
+
+42. **Order the guard before the side effects.** `GameSetupScreen` created the save slot on
+    disk and *then* hit the null session, so a failed start still left a slot behind.
+    Validate first, write second.
+
 
 ## Performance: measured, not assumed (2026-07-28)
 

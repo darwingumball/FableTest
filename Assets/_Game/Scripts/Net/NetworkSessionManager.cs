@@ -33,6 +33,28 @@ namespace Game.Net
     {
         public static NetworkSessionManager Instance { get; private set; }
 
+        /// <summary>
+        /// <see cref="Instance"/>, or null having said why.
+        ///
+        /// This object is authored in the BOOT scene and survives on DontDestroyOnLoad, so
+        /// pressing Play while MainMenu or World happens to be the open scene skips it
+        /// entirely - and every menu button that starts or joins a game then dies on a bare
+        /// NullReferenceException that says nothing about the actual cause. Callers use this
+        /// and show the message rather than dereferencing Instance blind.
+        /// </summary>
+        public static NetworkSessionManager Require()
+        {
+            if (Instance != null) return Instance;
+            Debug.LogError("[NetworkSessionManager] No session manager exists. It lives in the " +
+                           "Boot scene, so entering play mode directly on MainMenu or World " +
+                           "skips it. Open Assets/_Game/Scenes/Boot.unity and play from there.");
+            return null;
+        }
+
+        /// <summary>What to show the player when <see cref="Require"/> comes back null.</summary>
+        public const string NoSessionMessage =
+            "No session manager — press Play from the Boot scene.";
+
         /// <summary>Bump when the connection payload or replication protocol changes incompatibly.</summary>
         public const int PROTOCOL_VERSION = 1;
 
