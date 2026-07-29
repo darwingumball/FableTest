@@ -50,6 +50,19 @@ namespace Game.Editor
         private const float SHELTERED_AGITATION = 0.16f;
         private const float SHELTERED_RIPPLES = 0.5f;
         private const string MASK_PATH = "Assets/_Game/Textures/WaterRoughnessMask.png";
+        private const string MAT_FOLDER = "Assets/_Game/Materials/Test";
+
+        // HDRP ships this graph to drive its own procedural decals. Building materials from
+        // it means the wake needs no hand-authored Shader Graph, and WaterDecal accepts it
+        // because it carries the WaterDecalSubTarget tag the component checks for.
+        private const string DECAL_SHADER = "Packages/com.unity.render-pipelines.high-definition/" +
+            "Runtime/RenderPipelineResources/ShaderGraph/Sample Water Decal.shadergraph";
+
+        // _TYPE on that graph. Sphere and Box are plain shapes; BowWave is the V-shaped
+        // swell HDRP provides specifically for the front of a moving hull.
+        private const float DECAL_SPHERE = 0f;
+        private const float DECAL_BOX = 1f;
+        private const float DECAL_BOW_WAVE = 2f;
 
         // Close in, so the boat is a short swim from the beach. From here you drive it out
         // into the weather yourself.
@@ -59,11 +72,27 @@ namespace Game.Editor
         [MenuItem("Game/Setup/Build Water")]
         public static void Build()
         {
+            if (!MenuSceneBuilder.Ready("WaterBuilder")) return;
+
             var sand = TestMaterials.Lit("TB_Sand", new Color(0.34f, 0.31f, 0.26f), 0.06f, 0f);
             var wetRock = TestMaterials.Lit("TB_ShoreRock", new Color(0.17f, 0.17f, 0.18f), 0.30f, 0f);
             var hullPaint = TestMaterials.Lit("TB_Hull", new Color(0.28f, 0.10f, 0.09f), 0.45f, 0.1f);
             var deckWood = TestMaterials.Lit("TB_Deck", new Color(0.30f, 0.24f, 0.17f), 0.20f, 0f);
             var trim = TestMaterials.Lit("TB_Trim", new Color(0.12f, 0.13f, 0.16f), 0.55f, 0.6f);
+
+            // Wake pieces. The bow wave lifts the water; the foam box paints the trail. They
+            // are separate because HDRP's bow-wave shape writes deformation only, and foam
+            // is what actually persists behind a moving hull.
+            var bowWave = DecalMaterial("TB_BowWave", DECAL_BOW_WAVE, deformation: true, foam: false,
+                m => m.SetFloat("_Elevation", 1f));
+            var wakeFoam = DecalMaterial("TB_WakeFoam", DECAL_BOX, deformation: false, foam: true,
+                m => {
+                    // Blend distances are fractions of the half-size, so the foam fades out
+                    // toward the edges instead of ending on a hard rectangle.
+                    m.SetVector("_Blend_Distance", new Vector4(0.55f, 0.4f, 0f, 0f));
+                    m.SetFloat("_Cubic_Blend", 1f);
+                });
+            var ripple = DecalMaterial("TB_FlotsamRipple", DECAL_SPHERE, deformation: true, foam: true);
 
             var scene = EditorSceneManager.OpenScene(WORLD_SCENE, OpenSceneMode.Additive);
             foreach (var existing in scene.GetRootGameObjects())
@@ -75,8 +104,8 @@ namespace Game.Editor
 
             BuildWaterSurface(root.transform);
             BuildShore(root.transform, sand, wetRock);
-            BuildFloatingProps(root.transform, deckWood);
-            BuildBoat(scene, hullPaint, deckWood, trim);
+            BuildFloatingProps(root.transform, deckWood, ripple);
+            BuildBoat(scene, hullPaint, deckWood, trim, bowWave, wakeFoam);
 
             EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene, WORLD_SCENE);
@@ -130,6 +159,7 @@ namespace Game.Editor
             // underwater is just a green screen.
             surface.absorptionDistance = 4.5f;
 
+            ConfigureWakes(surface);
             ConfigureCaustics(surface);
             // Parented to the unscaled root, NOT to this object: the water quad is scaled
             // 1200x, and a collider under it inherits that scale, which turned a 1.2 km box
@@ -137,6 +167,100 @@ namespace Game.Editor
             ConfigureUnderwater(surface, parent);
 
             go.AddComponent<WaterVolume>();
+        }
+
+        /// <summary>
+        /// Turns on the two buffers the wakes write into.
+        ///
+        /// Foam is what makes a trail: the buffer accumulates and decays rather than being
+        /// redrawn each frame, so a foam source that MOVES leaves a line of slowly fading
+        /// foam behind it. Nothing has to author the trail - persistence does it.
+        /// Deformation is the other half, and is what makes a bow wave an actual bulge in
+        /// the surface rather than a painted-on texture.
+        /// </summary>
+        private static void ConfigureWakes(WaterSurface surface)
+        {
+            surface.foam = true;
+            surface.deformation = true;
+            // How long foam survives. This IS the length of the wake - at the default 0.5 a
+            // boat at 9 m/s has lost its trail before it is a hull-length astern.
+            surface.foamPersistenceMultiplier = 0.85f;
+            surface.foamColor = new Color(0.86f, 0.89f, 0.92f);
+            surface.foamSmoothness = 0.25f;
+            // Wind-driven whitecaps, separate from the decals. A little, so open water is
+            // not glassy, but low enough that the boat's own wake still reads against it.
+            surface.simulationFoamAmount = 0.35f;
+            surface.foamResolution = WaterSurface.WaterDecalRegionResolution.Resolution512;
+            surface.deformationRes = WaterSurface.WaterDecalRegionResolution.Resolution512;
+
+            // The decal region follows the main camera (decalRegionAnchor stays null), so
+            // this only needs to cover what is on screen, not the 1.2 km of water. 200 m at
+            // 512 is ~0.4 m per texel, which is about as fine as a PSX-resolution wake needs.
+            surface.decalRegionSize = new Vector2(200f, 200f);
+        }
+
+        /// <summary>
+        /// Builds a material for <see cref="WaterDecal"/> from HDRP's own procedural decal
+        /// graph. The component rejects anything whose shader is not a water decal subtarget,
+        /// so this cannot be an ordinary Lit material.
+        /// </summary>
+        private static Material DecalMaterial(string name, float type, bool deformation,
+                                              bool foam, System.Action<Material> configure = null)
+        {
+            var shader = AssetDatabase.LoadAssetAtPath<Shader>(DECAL_SHADER);
+            if (shader == null)
+            {
+                Debug.LogError($"[WaterBuilder] Water decal shader missing at {DECAL_SHADER}. " +
+                               "Wakes will be skipped.");
+                return null;
+            }
+
+            TestMaterials.EnsureFolder(MAT_FOLDER);
+            string path = $"{MAT_FOLDER}/{name}.mat";
+            var material = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (material == null)
+            {
+                material = new Material(shader);
+                AssetDatabase.CreateAsset(material, path);
+            }
+            material.shader = shader;
+
+            material.SetFloat("_TYPE", type);
+            material.SetFloat("_AffectDeformation", deformation ? 1f : 0f);
+            material.SetFloat("_AffectFoam", foam ? 1f : 0f);
+            configure?.Invoke(material);
+
+            EditorUtility.SetDirty(material);
+            return material;
+        }
+
+        /// <summary>
+        /// Attaches a decal. Position is in the parent's local space; only XZ matters, since
+        /// a decal is projected straight down onto the water.
+        /// </summary>
+        private static void AddDecal(Transform parent, string name, Material material,
+                                     Vector3 localPos, Vector2 regionSize, float amplitude,
+                                     float surfaceFoam = 1f, float deepFoam = 1f)
+        {
+            if (material == null) return;
+
+            var go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = localPos;
+
+            var decal = go.AddComponent<WaterDecal>();
+            decal.material = material;
+            // ScaleInvariant: regionSize is meant to BE the size in metres. Inheriting the
+            // hierarchy would scale it by the parent, and the crates are authored at 1.1.
+            decal.scaleMode = DecalScaleMode.ScaleInvariant;
+            decal.regionSize = regionSize;
+            decal.amplitude = amplitude;
+            decal.surfaceFoamDimmer = surfaceFoam;
+            decal.deepFoamDimmer = deepFoam;
+            decal.resolution = new Vector2Int(128, 128);
+            // The shape is procedural and static; only the transform moves, so the atlas
+            // entry needs rendering once rather than every frame.
+            decal.updateMode = UnityEngine.CustomRenderTextureUpdateMode.OnLoad;
         }
 
         /// <summary>
@@ -311,7 +435,7 @@ namespace Game.Editor
                 new Vector2(SHORE_WIDTH, BEACH_LENGTH + 8f));
         }
 
-        private static void BuildFloatingProps(Transform parent, Material wood)
+        private static void BuildFloatingProps(Transform parent, Material wood, Material ripple)
         {
             var props = TestMaterials.Node("Flotsam", parent, Vector3.zero);
 
@@ -342,6 +466,13 @@ namespace Game.Editor
                 body.interpolation = RigidbodyInterpolation.Interpolate;
 
                 crate.AddComponent<Buoyancy>();
+
+                // A small ring of disturbance. Bobbing in place it reads as ripples around
+                // the crate; pushed along by the swell it smears into a short trail, which
+                // is exactly what a half-submerged box adrift should do.
+                AddDecal(crate.transform, "Ripple", ripple, Vector3.zero,
+                    new Vector2(2.6f, 2.6f), amplitude: 0.09f,
+                    surfaceFoam: 0.7f, deepFoam: 0.35f);
             }
         }
 
@@ -349,7 +480,8 @@ namespace Game.Editor
         /// Tugboat: a level collision deck on the root, and a hull child that does the
         /// pitching and rolling. See <see cref="BoatMotion"/> for why they are separate.
         /// </summary>
-        private static void BuildBoat(Scene scene, Material hullPaint, Material deck, Material trim)
+        private static void BuildBoat(Scene scene, Material hullPaint, Material deck, Material trim,
+                                      Material bowWave, Material wakeFoam)
         {
             var boat = new GameObject(BOAT_NAME);
             SceneManager.MoveGameObjectToScene(boat, scene);
@@ -428,6 +560,18 @@ namespace Game.Editor
 
             var helm = BuildHelm(boat.transform, trim, deck);
             BuildLadder(boat.transform, trim);
+
+            // Wake. Both hang off the LEVEL root, so they stay square to the water while the
+            // hull rolls - a decal is projected straight down, and letting it roll with the
+            // visual would swing the wake out from under the boat.
+            AddDecal(boat.transform, "BowWave", bowWave, new Vector3(0f, 0f, 5.5f),
+                new Vector2(7.5f, 9f), amplitude: 0.55f);
+            // Wider and much longer than the hull, centred aft. The trail itself comes from
+            // foam persistence rather than from this shape; the box is only the source that
+            // keeps stamping while the boat moves out from under what it already laid down.
+            AddDecal(boat.transform, "WakeFoam", wakeFoam, new Vector3(0f, 0f, -2f),
+                new Vector2(7f, 20f), amplitude: 0f,
+                surfaceFoam: 1f, deepFoam: 0.75f);
 
             var motion = boat.AddComponent<BoatMotion>();
             var so = new SerializedObject(motion);

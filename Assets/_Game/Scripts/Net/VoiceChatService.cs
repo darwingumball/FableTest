@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using Game.Core;
 using Unity.Services.Authentication;
+using Unity.Services.Core;
 using Unity.Services.Vivox;
 using UnityEngine;
 
@@ -55,6 +56,54 @@ namespace Game.Net
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         private static void ResetStatics() => Instance = null;
 
+        /// <summary>
+        /// Vivox, or null when the SDK is not actually up.
+        ///
+        /// <see cref="IsReady"/> cannot be trusted on its own. This component is
+        /// DontDestroyOnLoad, so it outlives the session that started it: leaving a game
+        /// tears UGS down and nulls <c>VivoxService.Instance</c> while IsReady is still true
+        /// from the session before. That combination made Update throw a
+        /// NullReferenceException every single frame, forever, with nothing in the message
+        /// to say voice had simply gone away.
+        ///
+        /// The state check comes first because reading Instance before UGS is initialised
+        /// is not guaranteed to merely return null.
+        /// </summary>
+        private static IVivoxService Vivox
+        {
+            get
+            {
+                try
+                {
+                    return UnityServices.State == ServicesInitializationState.Initialized
+                        ? VivoxService.Instance
+                        : null;
+                }
+                catch
+                {
+                    return null;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Called when Vivox disappears underneath us. Drops back to a clean not-running
+        /// state so a later session starts voice from scratch instead of assuming it is
+        /// still logged in.
+        /// </summary>
+        private void HandleVoiceLost()
+        {
+            Debug.LogWarning("[Voice] Vivox is no longer available (session ended or UGS shut " +
+                             "down). Voice stopped; it will restart with the next session.");
+            IsReady = false;
+            GlobalVoiceEnabled = false;
+            IsTransmitting = false;
+            _positionalChannel = null;
+            _globalChannel = null;
+            _loggedIn = false;
+            _listener = null;
+        }
+
         private void Awake()
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
@@ -106,6 +155,14 @@ namespace Game.Net
             string positional = "prox-" + key;
             if (IsReady && _positionalChannel == positional) return;
 
+            if (Vivox == null)
+            {
+                Debug.LogWarning("[Voice] UGS is not initialised, so Vivox is unavailable. " +
+                                 "Voice is disabled for this session.");
+                IsReady = false;
+                return;
+            }
+
             try
             {
                 if (!_loggedIn)
@@ -144,7 +201,9 @@ namespace Game.Net
         public async Task StopVoiceAsync()
         {
             if (!_loggedIn) return;
-            try { await VivoxService.Instance.LeaveAllChannelsAsync(); }
+            var vivox = Vivox;
+            if (vivox == null) { HandleVoiceLost(); return; }
+            try { await vivox.LeaveAllChannelsAsync(); }
             catch (Exception e) { Debug.LogWarning($"[Voice] Leave failed: {e.Message}"); }
             IsReady = false;
             GlobalVoiceEnabled = false;
@@ -156,14 +215,16 @@ namespace Game.Net
         {
             if (!IsReady || string.IsNullOrEmpty(_globalChannel)) return;
             if (GlobalVoiceEnabled == enabled) return;
+            var vivox = Vivox;
+            if (vivox == null) { HandleVoiceLost(); return; }
 
             try
             {
                 if (enabled)
-                    await VivoxService.Instance.JoinGroupChannelAsync(
+                    await vivox.JoinGroupChannelAsync(
                         _globalChannel, ChatCapability.TextAndAudio);
                 else
-                    await VivoxService.Instance.LeaveChannelAsync(_globalChannel);
+                    await vivox.LeaveChannelAsync(_globalChannel);
 
                 GlobalVoiceEnabled = enabled;
                 OnGlobalVoiceChanged?.Invoke(enabled);
@@ -199,9 +260,13 @@ namespace Game.Net
         private void ApplyTransmitState(bool wantTransmit)
         {
             if (!IsReady) return;
+
+            var vivox = Vivox;
+            if (vivox == null) { HandleVoiceLost(); return; }
+
             bool transmit = wantTransmit && !SelfMuted;
-            if (transmit) VivoxService.Instance.UnmuteInputDevice();
-            else VivoxService.Instance.MuteInputDevice();
+            if (transmit) vivox.UnmuteInputDevice();
+            else vivox.MuteInputDevice();
 
             if (IsTransmitting == transmit) return;
             IsTransmitting = transmit;
@@ -211,6 +276,13 @@ namespace Game.Net
         private void Update()
         {
             if (!IsReady || string.IsNullOrEmpty(_positionalChannel)) return;
+
+            var vivox = Vivox;
+            if (vivox == null)
+            {
+                HandleVoiceLost();
+                return;
+            }
 
             // The player spawns after this component starts, so the listener is picked up
             // lazily rather than wired in the editor.
@@ -226,8 +298,7 @@ namespace Game.Net
             // player was when they joined. Passing the camera (not the body) matters:
             // panning is computed from the forward vector, so using the body would put
             // sound behind you whenever you looked over your shoulder.
-            VivoxService.Instance.Set3DPosition(
-                _listener.gameObject, _positionalChannel, allowPanning: true);
+            vivox.Set3DPosition(_listener.gameObject, _positionalChannel, allowPanning: true);
         }
 
         private static void HandleChannelMessage(VivoxMessage message)
