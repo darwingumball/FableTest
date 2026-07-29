@@ -262,6 +262,40 @@ MapCamera — prefabs cannot store scene references, so that link lives on the i
     the World scene additively will **save whatever pose the scene is currently in** — a
     temporary test pose got baked into `World.unity` (Sun intensity 0) this way.
 
+30. **A finite water surface does no underwater rendering without `volumeBounds`.**
+    `volumeDepth` / `volumeHeight` are consulted *only* for infinite oceans, so setting them
+    on a `Quad` surface looks like a fix and does nothing. Give it a `BoxCollider`. Two
+    traps follow: parent that collider anywhere under the water GameObject and it inherits
+    the quad's scale (a 1200× scale turned a 1.2 km box into a **720 km** one covering the
+    whole world below the waterline), and if the box reaches back under the city, every
+    basement and tunnel below y=0 renders as submerged. Parent it to the unscaled root and
+    clip its near edge to the shoreline.
+
+31. **`WaterSurface.simulationTime` reading 0 means there is no simulation, not a stuck
+    clock.** The getter is `simulation?.simulationTime ?? 0f`, and HDRP only allocates
+    `simulation` for a surface some camera actually renders. Open World standalone with no
+    player spawned and there is no game camera, so every `ProjectPointOnWaterSurface` call
+    returns false and the water looks broken. This is a **harness artifact** — water
+    physics can only be verified from a real session.
+
+32. **The water mask is the tool for varying roughness by place, and it is honest.** It
+    attenuates each simulation band per texel (R = swell, G = agitation, B = ripples), and
+    `waterScriptInteractionsMode = GPUReadback` reads the same mask back for the CPU height
+    search — so buoyancy, hull sampling and what you can see all agree. Write it as a real
+    imported, uncompressed, **non-sRGB**, Clamp-wrapped PNG; Clamp matters, or the calm bay
+    wraps back in every mask extent. Note `waterMaskExtent` is the FULL width, and UV.y maps
+    to world Z.
+
+33. **`CreatePrimitive` hands out a collider with every box.** The tugboat's "visual only"
+    hull was quietly carrying eight of them, and the deck plate's sat 1 cm *above* the
+    level deck collider — so the player was standing on the tilting one and the entire
+    reason the deck and hull are separate objects was defeated. Strip colliders from
+    anything built as decoration.
+
+34. **`GetComponentInParent<IInteractable>()` makes a root-level interactable answer for
+    every collider beneath it.** `BoatHelm` on the boat root offered "Take the helm" from
+    anywhere on the hull. Put interactables on their own child with their own collider.
+
 
 ## Performance: measured, not assumed (2026-07-28)
 
@@ -420,6 +454,53 @@ while the player free-falls. `NetworkPlayer` now keeps `FirstPersonController` d
 with a `spawnPointWaitTimeout` fallback. Placement also runs through `GroundProbe`, which
 drops the authored/saved Y onto whatever surface is actually on top — this is what makes
 both spawn and save-restore snow-depth-agnostic.
+
+## Water: roughness gradient, driving, climbing (2026-07-28)
+
+`Game/Setup/Build Water`. Water level −3.2; the ground and snow region are both 100 m
+square, so the beach starts at z=46 where the ground ends and shelves down — water never
+touches the street.
+
+**Scale.** The quad is 1200 m spanning z 20..1220. It has to be: "rough 300 m out" needs
+300 m of open water past a shoreline at z≈72.
+
+**Roughness by place.** Open-water settings (36 m/s over a 180 m repeat) are the *storm*
+state; `WaterRoughnessMask.png` scales them down inshore. Fully sheltered to z=150,
+smoothstep to full strength by z=400 — about 300 m past the beach. Sheltered multipliers
+are 0.06 swell / 0.16 agitation / 0.50 ripples; ripples keep most of their strength because
+glassy water reads as broken rather than calm. The 180 m repetition is not tunable downward:
+HDRP's default 500 m repeat is flat across a 13 m hull and the boat measured *zero* tilt.
+
+**Underwater.** `underWater` + `underWaterRefraction`, with `absorptionDistance` 4.5 and
+`absorptionDistanceMultiplier` 3 — you see roughly three times further under the surface
+than through it, because absorption tuned for looking *into* water leaves you blind once
+submerged. Caustics use band 2 (the ripples); bands 0–1 are the 180 m swell and produce
+enormous soft smears instead of the recognisable dancing net.
+
+**The boat is drivable, and that is a deliberate break in the architecture.** Autopilot is a
+pure function of `ServerTime.Time` and replicates nothing. A hull steered by a human has no
+function of time to evaluate, so the server integrates it and replicates twelve bytes
+(`BoatHelm.Nav`: XZ, heading, speed); clients ease onto it rather than snapping. **Once
+engaged it never returns to the patrol course** — handing back to a time-driven course would
+teleport the hull to wherever that course says it should be by now. Released, it coasts.
+Rudder authority scales with way on and reverses going astern, which is the single thing
+that makes a boat feel like a boat and not a car.
+
+**Ladder** (`Ladder.cs`) is entirely local — the climber's own NetworkTransform already
+replicates the result, so there is nothing to agree on. The climb track is in ladder-LOCAL
+space and re-resolved every LateUpdate, which is what carries the climber with a heaving,
+turning boat for free. Parented to the level root, not the rolling hull: a 16° roll would
+throw the top exit most of a metre sideways, over the rail.
+
+**Once-per-frame toggle guard.** Both the ladder and the helm are reachable from the
+interaction raycast *and* from a direct input read (so you are not stranded if you look
+away). Without a `Time.frameCount` guard on the toggle, one keypress mounts and instantly
+dismounts.
+
+**Helm seat state follows the replicated `_driver`, never the local button press.**
+Releasing optimistically hands movement back before the server agrees, and if the server
+refuses you end up walking around while still steering.
+
 
 ## Admin console
 

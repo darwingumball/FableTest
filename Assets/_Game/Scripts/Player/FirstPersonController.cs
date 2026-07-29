@@ -65,6 +65,13 @@ namespace Game.Player
         public bool IsSprinting { get; private set; }
         public bool IsCrouching { get; private set; }
         public bool IsGrounded => _controller.isGrounded;
+        /// <summary>
+        /// Raw movement stick, ungated by <see cref="SetMoveControl"/>. Systems that take
+        /// the player over and steer something else with WASD - the ladder, the boat helm -
+        /// need the input precisely while the player's own movement is suppressed. Menus
+        /// still cut it off, because opening one disables the whole Gameplay action map.
+        /// </summary>
+        public Vector2 MoveInput => _moveAction?.ReadValue<Vector2>() ?? Vector2.zero;
         public float CameraPitch => _pitch;
         public Vector3 HorizontalVelocity => new(_velocity.x, 0f, _velocity.z);
 
@@ -84,6 +91,7 @@ namespace Game.Player
         private bool _inWater;
         private float _submersion;
         private float _waterSurfaceY;
+        private bool _climbing;
 
         /// <summary>
         /// Re-reads facing from the transform. Call after any external repositioning
@@ -103,11 +111,45 @@ namespace Game.Player
         /// is erased on the next frame and the player appears welded to world north while
         /// the deck turns under them.
         /// </summary>
-        public void AddYaw(float degrees)
+        public void AddYaw(float degrees) => SetYaw(_yaw + degrees);
+
+        /// <summary>Faces an absolute heading. Same tracked-yaw requirement as <see cref="AddYaw"/>.</summary>
+        public void SetYaw(float degrees)
         {
-            _yaw += degrees;
+            _yaw = degrees;
             transform.rotation = Quaternion.Euler(0f, _yaw, 0f);
         }
+
+        /// <summary>
+        /// Places the body ignoring collision. The CharacterController has to be cycled or
+        /// it keeps its own cached position and snaps back on the next Move.
+        ///
+        /// Used by <see cref="Game.World.Ladder"/> every frame while climbing: a ladder pins
+        /// you to a fixed track, and moving along it with Move() would let the hull it is
+        /// bolted to shove you off that track.
+        /// </summary>
+        public void TeleportTo(Vector3 worldPosition)
+        {
+            _controller.enabled = false;
+            transform.position = worldPosition;
+            _controller.enabled = true;
+            _velocity = Vector3.zero;
+        }
+
+        /// <summary>
+        /// Hands vertical position over to a ladder. Movement, gravity and jumping are all
+        /// suppressed; look stays free so you can still see where you are going.
+        /// </summary>
+        public void SetClimbing(bool climbing)
+        {
+            if (_climbing == climbing) return;
+            _climbing = climbing;
+            _velocity = Vector3.zero;
+            // _lastGroundedTime is deliberately left stale, so stepping off a ladder
+            // halfway up does not hand out a free coyote-time jump.
+        }
+
+        public bool IsClimbing => _climbing;
 
         /// <summary>
         /// Reported by <see cref="Game.World.SwimmerProbe"/>. <paramref name="submersion"/>
@@ -196,6 +238,16 @@ namespace Game.Player
 
         private void ApplyMovement()
         {
+            if (_climbing)
+            {
+                // The ladder drives position outright - it has to, because the rungs may
+                // themselves be moving on a boat. Nothing here may add gravity, walking or
+                // a carry delta on top of that. Checked before the swim branch so grabbing
+                // a ladder from the water actually gets you out of it.
+                _externalMove = Vector3.zero;
+                return;
+            }
+
             bool grounded = _controller.isGrounded;
             if (grounded) _lastGroundedTime = Time.time;
 

@@ -27,6 +27,11 @@ namespace Game.World
         [Tooltip("Child that carries pitch and roll. Must NOT hold the deck collider.")]
         [SerializeField] private Transform hullVisual;
 
+        [Header("Helm")]
+        [Tooltip("Optional. While nobody has ever taken the wheel the boat runs the patrol " +
+                 "course below; from the first time it is driven, the helm supplies the pose.")]
+        [SerializeField] private BoatHelm helm;
+
         [Header("Course (pure function of server time)")]
         [Tooltip("Centre of the patrol circle, world space.")]
         [SerializeField] private Vector3 courseCentre = new(0f, 0f, 150f);
@@ -69,15 +74,30 @@ namespace Game.World
             Vector3 previousPosition = transform.position;
             float previousYaw = transform.eulerAngles.y;
 
-            // --- course: position and heading straight from server time ---
-            float lap = Mathf.Abs(lapSeconds) < 0.01f ? 1f : lapSeconds;
-            float phase = (float)(t / lap) * Mathf.PI * 2f;
-            Vector3 planar = new(Mathf.Cos(phase) * courseRadius, 0f, Mathf.Sin(phase) * courseRadius);
-            Vector3 target = courseCentre + planar;
+            Vector3 target;
+            Vector3 tangent;
 
-            // Face along the tangent of the circle, which is the derivative of the above.
-            Vector3 tangent = new(-Mathf.Sin(phase), 0f, Mathf.Cos(phase));
-            if (lapSeconds < 0f) tangent = -tangent;
+            if (helm != null && helm.HasControl)
+            {
+                // Driven: the server integrates the hull and every peer eases onto the
+                // replicated result. See BoatHelm for why this cannot stay a function of
+                // time once a human is steering.
+                target = helm.Position;
+                tangent = helm.Forward;
+            }
+            else
+            {
+                // --- course: position and heading straight from server time ---
+                float lap = Mathf.Abs(lapSeconds) < 0.01f ? 1f : lapSeconds;
+                float phase = (float)(t / lap) * Mathf.PI * 2f;
+                Vector3 planar = new(Mathf.Cos(phase) * courseRadius, 0f,
+                                     Mathf.Sin(phase) * courseRadius);
+                target = courseCentre + planar;
+
+                // Face along the tangent of the circle, the derivative of the above.
+                tangent = new Vector3(-Mathf.Sin(phase), 0f, Mathf.Cos(phase));
+                if (lapSeconds < 0f) tangent = -tangent;
+            }
 
             // --- wave response: sample four points around the hull ---
             var water = WaterVolume.Instance;
