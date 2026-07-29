@@ -143,7 +143,24 @@ namespace Game.Editor
             // view-independent, so culling it by camera distance would visibly darken the
             // town as you sail away, which is a look change and not an optimisation. A shadow
             // at six times the light's own range carries no information.
-            if (shadows) hd.shadowFadeDistance = range * SHADOW_FADE_RANGE_MULTIPLE;
+            if (shadows)
+            {
+                hd.shadowFadeDistance = range * SHADOW_FADE_RANGE_MULTIPLE;
+
+                // Cache the shadow map instead of redrawing it every frame. These lights are
+                // bolted to buildings and the buildings do not move, so the static half of
+                // the map is the same picture forever - and HDRP has already allocated a
+                // 4096 cached atlas that was sitting completely unused.
+                hd.shadowUpdateMode = ShadowUpdateMode.OnEnable;
+                // ...but the player and anything they carry still cast, drawn on top of the
+                // cached static map each frame. Without this a cached shadow means you stand
+                // under a work light and throw nothing.
+                hd.alwaysDrawDynamicShadows = true;
+                // Keep the cached map when the light leaves the frustum. Otherwise turning
+                // away and back re-renders it on the frame it reappears, which is felt as a
+                // hitch exactly when glancing across a lit building.
+                hd.preserveCachedShadow = true;
+            }
 
             // PracticalLight owns the intensity from here: day/night response plus live
             // console scaling by group.
