@@ -13,7 +13,21 @@ MonoBehaviour:
   m_Name: weather_Clear
   m_EditorClassIdentifier: 
   type: 0
-  volumeProfile: {fileID: 0}
+  fogMeanFreePath: 900
+  volumetricFog: 1
+  fogDepthExtent: 64
+  fogAlbedo: {r: 0.75, g: 0.78, b: 0.82, a: 1}
+  fogAnisotropy: 0.2
+  fogMaximumHeight: 60
+  dayExposure: 12.2
+  cloudsEnabled: 1
+  cloudDensity: 0.1
+  cloudShapeFactor: 0.92
+  cloudErosion: 0.9
+  cloudAltitude: 2000
+  cloudThickness: 1200
+  cloudSunDimmer: 1
+  cloudWindSpeed: 10
   rainRate: 0
   snowRate: 0
   windStrength: 0.05

@@ -13,7 +13,21 @@ MonoBehaviour:
   m_Name: weather_Overcast
   m_EditorClassIdentifier: 
   type: 1
-  volumeProfile: {fileID: 11400000, guid: f6484223ffff2db478665b3a7da2faee, type: 2}
+  fogMeanFreePath: 480
+  volumetricFog: 1
+  fogDepthExtent: 80
+  fogAlbedo: {r: 0.75, g: 0.78, b: 0.82, a: 1}
+  fogAnisotropy: 0.35
+  fogMaximumHeight: 70
+  dayExposure: 12.9
+  cloudsEnabled: 1
+  cloudDensity: 0.72
+  cloudShapeFactor: 0.6
+  cloudErosion: 0.5
+  cloudAltitude: 900
+  cloudThickness: 2600
+  cloudSunDimmer: 0.55
+  cloudWindSpeed: 26
   rainRate: 0
   snowRate: 0
   windStrength: 0.2

@@ -30,6 +30,18 @@ namespace Game.World
         [Tooltip("Height where fog starts thinning out.")]
         public float fogMaximumHeight = 60f;
 
+        [Header("Exposure")]
+        [Tooltip("Daytime exposure for this weather, EV100. LOWER IS BRIGHTER - it is a " +
+                 "camera stop, not a brightness. Roughly one stop per 1.0, so 12.3 is twice " +
+                 "as bright as 13.3.\n\n" +
+                 "Auto-exposure is deliberately not used (see WeatherManager): a big bright " +
+                 "sky or sunlit sea swings it wildly as you turn around. Fixed per weather " +
+                 "means clear noon is genuinely bright and a storm is genuinely gloomy, and " +
+                 "both are art directions rather than whatever the metering happened to pick.\n\n" +
+                 "0 falls back to WeatherManager's own dayExposure, so presets authored " +
+                 "before this field still behave as they did.")]
+        public float dayExposure;
+
         [Header("Clouds")]
         public bool cloudsEnabled = true;
         [Tooltip("0 = wispy, 1 = solid overcast.")]

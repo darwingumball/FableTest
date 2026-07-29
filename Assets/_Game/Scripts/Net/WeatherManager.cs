@@ -247,7 +247,14 @@ namespace Game.Net
             if (_exposure != null && NetworkTimeSync.Instance != null)
             {
                 float dayBlend = World.SunController.DayBlend01(NetworkTimeSync.Instance.HourOfDay);
-                float ev = Mathf.Lerp(nightExposure, dayExposure, dayBlend);
+
+                // Daytime exposure is a property of the WEATHER, not one number for the whole
+                // game. A single global value has to be a compromise between clear noon and a
+                // storm, and the compromise reads as permanently overcast. Presets that leave
+                // it at 0 fall back to the old behaviour.
+                float fromDay = from.dayExposure > 0f ? from.dayExposure : dayExposure;
+                float toDay = to.dayExposure > 0f ? to.dayExposure : dayExposure;
+                float ev = Mathf.Lerp(nightExposure, Mathf.Lerp(fromDay, toDay, k), dayBlend);
                 float dimmer = cloudsOn ? _clouds.sunLightDimmer.value : 1f;
                 CloudSunDimmer = dimmer;
                 ev -= (1f - dimmer) * cloudExposureCompensation;
