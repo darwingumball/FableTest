@@ -34,6 +34,15 @@ namespace Game.World
                 return;
             }
 
+            // Inside a hull's air pocket the surface overhead means nothing - there is a deck
+            // between you and it. Tested at the same chest height the threshold below uses,
+            // so the two agree about which part of the body decides.
+            if (DryHullVolume.ContainsPoint(transform.position + Vector3.up * swimStartHeight))
+            {
+                if (_swimming) SetSwimming(false, 0f, 0f);
+                return;
+            }
+
             if (!water.SampleSurface(transform.position, out float surfaceY, out _))
                 return;   // simulation not ready - leave the current state alone
 

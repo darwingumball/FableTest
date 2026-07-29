@@ -35,6 +35,7 @@ namespace Game.World
 
         private WaterSurface _surface;
         private Transform _decalAnchor;
+        private bool _authoredUnderWater;
 
         /// <summary>Approximate still-water level, for cheap "am I under water at all" tests.</summary>
         public float BaseLevel => transform.position.y;
@@ -46,6 +47,7 @@ namespace Game.World
         {
             _surface = GetComponent<WaterSurface>();
             _surface.scriptInteractions = true;   // without this every query returns false
+            _authoredUnderWater = _surface.underWater;
             Instance = this;
         }
 
@@ -66,6 +68,31 @@ namespace Game.World
             _surface.simulationTime = (float)(t * timeScale);
 
             UpdateDecalAnchor();
+            UpdateUnderwaterSuppression();
+        }
+
+        /// <summary>
+        /// Switches the underwater effect off while the local camera is inside a hull's air
+        /// pocket - see <see cref="DryHullVolume"/>.
+        ///
+        /// For a finite water surface HDRP decides "the camera is submerged" with a single
+        /// <c>volumeBounds.bounds.Contains(cameraPosition)</c>. There is no way to punch a
+        /// hole in that box, and it ignores water excluders entirely, so a dry compartment
+        /// below the waterline renders with the sea drawn out of it (the excluder works) and
+        /// the screen still flooded with underwater fog and caustics (this does not).
+        ///
+        /// Toggling the whole surface is the right lever rather than a blunt one: this is a
+        /// per-peer decision about one camera, and every peer has exactly one.
+        /// </summary>
+        private void UpdateUnderwaterSuppression()
+        {
+            if (!_authoredUnderWater) return;   // never turn it ON for a surface without it
+
+            // The decal anchor is already the local player's camera (see UpdateDecalAnchor),
+            // which is the eye position this effect is about.
+            bool dry = _decalAnchor != null && DryHullVolume.ContainsPoint(_decalAnchor.position);
+            if (_surface.underWater == !dry) return;
+            _surface.underWater = !dry;
         }
 
         /// <summary>

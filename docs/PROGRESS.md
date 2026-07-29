@@ -360,6 +360,53 @@ MapCamera — prefabs cannot store scene references, so that link lives on the i
     trail is not authored: the foam buffer decays instead of being redrawn, so a moving
     foam source leaves a fading line — `foamPersistenceMultiplier` IS the wake length.
 
+45. **A NetworkTransform replicates WORLD position, which is wrong for anything on a moving
+    platform.** A boat at 9 m/s covers most of a metre between ticks, so every remote rider
+    arrives a tick or two stale and visibly slides around the deck no matter how well they
+    are interpolated. The fix is NGO parenting (`NetworkObject.TrySetParent`, **server
+    only**) plus `NetworkTransform.SwitchTransformSpaceWhenParented = true`, which flips the
+    replicated values into the parent's space on the tick the parent changes AND converts
+    the in-flight interpolation with it. Setting `InLocalSpace` by hand does neither and
+    snaps. It is mutually exclusive with `UseUnreliableDeltas` — NGO silently reverts one of
+    them at runtime, and which one depends on the order they were changed in.
+
+46. **A CharacterController parented under a Rigidbody stays an independent actor.** Verified
+    directly: a child `BoxCollider` reports `attachedRigidbody = <parent>`, a child
+    `CharacterController` reports `null`. So parenting riders to the boat does not fold them
+    into its compound collider and they keep colliding with the deck normally. This was the
+    one structural risk in the parenting approach.
+
+47. **Once a rider is parented, the local carry MUST stop.** The hierarchy moves them; adding
+    `ApplyCarry` on top double-counts every metre the boat travels. Yaw is the opposite
+    case and must KEEP being applied, parented or not, because `FirstPersonController`
+    rewrites its world rotation from its own tracked `_yaw` every frame — the deck turns a
+    parented player and the controller immediately turns them back.
+
+48. **HDRP water exclusion only removes the SURFACE, not the underwater effect.** For a
+    finite surface, "the camera is submerged" is a plain
+    `volumeBounds.bounds.Contains(cameraPosition)` that ignores excluders completely. A dry
+    compartment below the waterline therefore renders with the sea correctly carved out of
+    it and the screen still flooded with underwater fog and caustics. Swimming has the same
+    gap — `SwimmerProbe` compares surface height to your chest and does not care that there
+    is a deck in between. Both go through `DryHullVolume` now.
+
+49. **The exclusion mesh must not poke out through the hull.** Exclusion is a stencil tag
+    drawn with `LessEqual` depth against the opaque buffer, so any part of the box that
+    reaches outside the hull starts rejecting the open sea alongside the boat as well. And
+    `WaterExcluder` keeps both of its fields internal — they can only be written through a
+    `SerializedObject`. Neither is read at runtime (the pass just collects renderers using
+    the exclusion material) but leaving them empty makes the component's own inspector claim
+    it has nothing to exclude.
+
+50. **A file written externally can land in Unity's asset database but NOT in the compile
+    set.** `AssetDatabase.FindAssets` found it, the importer was `MonoImporter`, and
+    `GetAssemblyNameFromScriptPath` returned the right assembly — while
+    `Library/Bee/artifacts/*/Game.Runtime.rsp` (the actual compiler input list) omitted it,
+    so every reference failed with CS0103 through repeated forced refreshes. Reading that
+    .rsp is the fastest way to tell "Unity has not seen my file" from "my file has an
+    error". The fix is `AssetDatabase.DeleteAsset` then rewrite and re-import — deleting the
+    file from the shell does not clear the stale record.
+
 
 ## Performance: measured, not assumed (2026-07-28)
 
@@ -564,6 +611,59 @@ dismounts.
 **Helm seat state follows the replicated `_driver`, never the local button press.**
 Releasing optimistically hands movement back before the server agrees, and if the server
 refuses you end up walking around while still steering.
+
+### Riders on a moving deck, across the network (2026-07-29)
+
+`BoatRiderCarry` runs two mechanisms that solve different problems, and the split matters:
+
+**Network parenting (server).** Riders inside the deck volume are parented to the boat's
+NetworkObject, which flips their NetworkTransform into local space. This is the part that
+makes *other people* on the deck look right — see gotcha 45. The boat's pose is a pure
+function of server time, so every peer reconstructs the same world position from that local
+offset exactly; the only thing left being interpolated is the rider's walking. `TrySetParent`
+is server-only, and has to be, or two peers could disagree about whose deck someone is on.
+
+**Local carry (every peer, own player only).** Applied only while NOT parented — during the
+round trip it takes the server to notice you stepped aboard, and in any session with no
+network at all. See gotcha 47 for why it must stop once the parent lands, and why yaw is
+the exception that must keep being applied either way.
+
+**Hysteresis, and only ever claiming an UNPARENTED player.** Boarding uses the plain deck
+volume, leaving uses a padded one, because each parent change is a network message. And a
+boat never steals a rider from another boat: stepping between two hulls costs one frame with
+no parent, which the local carry covers, whereas letting boats claim each other's riders lets
+two overlapping deck volumes trade the same player back and forth every frame.
+
+**The ladder owns its climber outright.** `BoatRiderCarry` bails on `IsClimbing`. The ladder
+is bolted to the same hull and already applies its own yaw, so both running would spin the
+climber at twice the boat's rate.
+
+### Hulls below the waterline (2026-07-29)
+
+The tug now has a **hold**: floor at boat-local y=−2.6 against a waterline at y=−1.1, so a
+metre and a half of that room is under the sea outside it. It is the reference case for the
+submerged walkspaces to come, and it takes three things agreeing — HDRP does one of them.
+
+- **The surface** is pure geometry: a mesh drawn with `MaterialWaterExclusion` tags those
+  pixels in the stencil buffer and the water surface is rejected there. No code at runtime.
+  Requires `supportWaterExclusion` on the HDRP asset (on) and the `WaterExclusion` frame
+  setting (on by default for cameras). See gotcha 49 for the shape constraint.
+- **The underwater effect** and **swimming** both go through `DryHullVolume`, which is a
+  box in hull-local space that rides the boat for free. See gotcha 48 for why neither is
+  handled by the excluder.
+
+`WaterVolume` switches `WaterSurface.underWater` off while the local camera is inside a dry
+volume. Toggling the whole surface is the right lever rather than a blunt one: this is a
+per-peer decision about one camera, and every peer has exactly one. It never turns the
+effect *on* for a surface that was authored without it.
+
+**The hold is built on the LEVEL root, walls included** — unlike the rest of the hull, which
+rolls. A deck you stand on can roll underneath you and still read correctly; a room you
+stand *inside* cannot, because at any real angle of heel its walls sweep through the camera.
+
+The boarding ladder moved forward to z=5.4. Its top exit lands inboard at x=−1.45, which
+used to be clear deck and is now the middle of the hatch — climbing aboard from the water
+would have dropped you straight down into the hold.
 
 
 ## Admin console

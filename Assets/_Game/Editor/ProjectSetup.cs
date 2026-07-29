@@ -116,6 +116,15 @@ namespace Game.Editor
             netTransform.AuthorityMode = NetworkTransform.AuthorityModes.Owner;
             netTransform.Interpolate = true;
             netTransform.InLocalSpace = false;
+            // Riders on a boat are parented to its NetworkObject by BoatRiderCarry. This
+            // makes NGO flip the replicated values into the parent's local space on the tick
+            // the parent changes, and convert the in-flight interpolation with it - without
+            // it the rider snaps once on boarding and, worse, keeps replicating world
+            // position, which is the whole thing the parenting exists to avoid.
+            netTransform.SwitchTransformSpaceWhenParented = true;
+            // Mutually exclusive with the above; NGO reverts one of them at runtime if both
+            // are set, and which one it picks depends on the order they were changed in.
+            netTransform.UseUnreliableDeltas = false;
             netTransform.SyncScaleX = netTransform.SyncScaleY = netTransform.SyncScaleZ = false;
 
             var fpc = Ensure<FirstPersonController>(root);

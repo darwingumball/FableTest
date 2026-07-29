@@ -25,6 +25,22 @@ namespace Game.Editor
         private const string ROOT_NAME = "TestWater";
         private const string BOAT_NAME = "TestBoat";
 
+        // --- the boat's below-waterline hold, all in boat-local space ---
+        // The boat root rides freeboard (1.1 m) above the water, so local y = -1.1 IS the
+        // waterline. A floor at -2.6 puts the room 1.5 m under - deep enough that a player
+        // standing in it would be chest-deep and swimming if the hold were not excluded,
+        // which is the whole point of testing it here.
+        private const float HOLD_FLOOR_Y = -2.6f;
+        private const float HOLD_CEILING_Y = 0.64f;    // underside of the deck plating
+        private const float HOLD_CENTRE_Z = 2.4f;      // forward of the helm at z = -1.75
+        private const float HOLD_WIDTH = 3f;
+        private const float HOLD_LENGTH = 3.6f;
+        // Exclusion reaches above the waterline so a crest cannot spill over its top edge.
+        private const float HOLD_EXCLUSION_TOP_Y = -0.4f;
+        private const string EXCLUSION_MATERIAL =
+            "Packages/com.unity.render-pipelines.high-definition/Runtime/" +
+            "RenderPipelineResources/Material/MaterialWaterExclusion.mat";
+
         // Ground spans -50..50. The beach starts at its edge and shelves down to the water.
         private const float SHORE_START_Z = 46f;
         private const float WATER_LEVEL = -3.2f;
@@ -509,11 +525,14 @@ namespace Game.Editor
             body.interpolation = RigidbodyInterpolation.None;
 
             // --- collision deck: stays level, this is what the player walks on ---
-            var deckCollider = boat.AddComponent<BoxCollider>();
-            // Top face flush with the visual deck plate at y=0.80, so standing on the level
-            // collider does not leave the player shin-deep in the planking.
-            deckCollider.center = new Vector3(0f, 0.45f, 0f);
-            deckCollider.size = new Vector3(5.2f, 0.7f, 13f);
+            // Four pieces rather than one box, because the hold below needs an opening in
+            // the deck. Top faces flush with the visual deck plate at y=0.80, so standing on
+            // the level collider does not leave the player shin-deep in the planking.
+            AddDeckPiece(boat, new Vector3(0f, 0.45f, -2.95f), new Vector3(5.2f, 0.7f, 7.1f));
+            AddDeckPiece(boat, new Vector3(0f, 0.45f, 5.35f), new Vector3(5.2f, 0.7f, 2.3f));
+            for (int i = -1; i <= 1; i += 2)
+                AddDeckPiece(boat, new Vector3(i * 2.05f, 0.45f, HOLD_CENTRE_Z),
+                             new Vector3(1.1f, 0.7f, HOLD_LENGTH));
 
             // Gunwales so you can walk to the edge without walking off it.
             for (int i = -1; i <= 1; i += 2)
@@ -532,13 +551,25 @@ namespace Game.Editor
             // --- visual hull: this is the part that rolls ---
             var hull = TestMaterials.Node("Hull", boat.transform, Vector3.zero);
 
-            TestMaterials.Box("HullBody", hull, new Vector3(0f, -0.5f, 0f),
-                new Vector3(5.2f, 2.2f, 13f), hullPaint);
+            // Deepened from a 2.2 m box so it actually encloses the hold: the floor sits at
+            // -2.6 and the hull has to reach past it, which puts 1.8 m of this boat under
+            // water. That is a believable draft for a tug and it is what makes a walkway
+            // below the waterline mean anything.
+            TestMaterials.Box("HullBody", hull, new Vector3(0f, -1.15f, 0f),
+                new Vector3(5.2f, 3.5f, 13f), hullPaint);
             var bow = TestMaterials.Box("Bow", hull, new Vector3(0f, -0.4f, 7.1f),
                 new Vector3(3.4f, 2f, 2.6f), hullPaint);
             bow.transform.rotation = Quaternion.Euler(0f, 45f, 0f);
-            TestMaterials.Box("DeckPlate", hull, new Vector3(0f, 0.72f, 0f),
-                new Vector3(5.2f, 0.16f, 13f), deck);
+
+            // Deck plating, carved around the hold opening to match the collision deck.
+            TestMaterials.Box("DeckPlate_Aft", hull, new Vector3(0f, 0.72f, -2.95f),
+                new Vector3(5.2f, 0.16f, 7.1f), deck);
+            TestMaterials.Box("DeckPlate_Fwd", hull, new Vector3(0f, 0.72f, 5.35f),
+                new Vector3(5.2f, 0.16f, 2.3f), deck);
+            for (int i = -1; i <= 1; i += 2)
+                TestMaterials.Box($"DeckPlate_Side_{i}", hull,
+                    new Vector3(i * 2.05f, 0.72f, HOLD_CENTRE_Z),
+                    new Vector3(1.1f, 0.16f, HOLD_LENGTH), deck);
 
             // Wheelhouse aft, so there is something to walk around.
             TestMaterials.Box("Wheelhouse", hull, new Vector3(0f, 2f, -3.2f),
@@ -566,6 +597,7 @@ namespace Game.Editor
 
             var helm = BuildHelm(boat.transform, trim, deck);
             BuildLadder(boat.transform, trim);
+            BuildHold(boat.transform, hullPaint, deck, trim);
 
             // Wake. Both hang off the LEVEL root, so they stay square to the water while
             // the hull rolls - a decal is projected straight down, and letting it roll with
@@ -625,9 +657,150 @@ namespace Game.Editor
 
             var carry = boat.AddComponent<BoatRiderCarry>();
             var cso = new SerializedObject(carry);
-            cso.FindProperty("deckCenter").vector3Value = new Vector3(0f, 1.6f, 0f);
-            cso.FindProperty("deckSize").vector3Value = new Vector3(6f, 3.4f, 14.4f);
+            // Reaches from just under the keel to head height above the deck, so someone
+            // down in the hold counts as a rider too. Narrowed to 5.4 wide (the deck itself
+            // is 5.2) specifically to leave the boarding ladder at x=-2.75 outside it -
+            // otherwise a swimmer hanging on the rungs gets towed along by the hull.
+            cso.FindProperty("deckCenter").vector3Value = new Vector3(0f, 0.4f, 0f);
+            cso.FindProperty("deckSize").vector3Value = new Vector3(5.4f, 6.8f, 14.4f);
             cso.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        private static void AddDeckPiece(GameObject boat, Vector3 centre, Vector3 size)
+        {
+            var piece = boat.AddComponent<BoxCollider>();
+            piece.center = centre;
+            piece.size = size;
+        }
+
+        /// <summary>
+        /// A hold below the waterline: the reference case for a walkspace that is under the
+        /// water. Floor at y=-2.6 against a waterline at y=-1.1, so a metre and a half of
+        /// this room is below the sea outside it.
+        ///
+        /// Three separate things have to agree for that to work, and HDRP only does the
+        /// first by itself:
+        ///
+        /// - THE SURFACE. The exclusion mesh tags these pixels in the stencil buffer and the
+        ///   water surface is rejected there, so the sea is not drawn across the inside of
+        ///   the room. Purely geometry - no code runs for this.
+        /// - THE UNDERWATER EFFECT, which is a plain box test against the water's
+        ///   volumeBounds and ignores excluders completely.
+        /// - SWIMMING, which compares the surface height to your chest and does not care
+        ///   that there is a deck in between.
+        ///
+        /// The last two go through <see cref="DryHullVolume"/>.
+        ///
+        /// Unlike the rest of the hull this is built on the LEVEL root rather than the
+        /// rolling visual, walls included. A deck you stand on can roll underneath you and
+        /// still read correctly, but a room you stand inside cannot: at any real angle of
+        /// heel its walls would sweep through the camera.
+        /// </summary>
+        private static void BuildHold(Transform boat, Material hullPaint, Material deck, Material trim)
+        {
+            var hold = TestMaterials.Node("Hold", boat, Vector3.zero);
+
+            // Floor is wider than the opening so the walls stand on it rather than beside it.
+            TestMaterials.Box("Floor", hold, new Vector3(0f, HOLD_FLOOR_Y - 0.15f, HOLD_CENTRE_Z),
+                new Vector3(HOLD_WIDTH + 0.6f, 0.3f, HOLD_LENGTH + 0.6f), deck);
+
+            float wallHeight = HOLD_CEILING_Y - HOLD_FLOOR_Y;
+            float wallCentreY = (HOLD_CEILING_Y + HOLD_FLOOR_Y) * 0.5f;
+            for (int i = -1; i <= 1; i += 2)
+            {
+                TestMaterials.Box($"Wall_Side_{i}", hold,
+                    new Vector3(i * (HOLD_WIDTH * 0.5f + 0.15f), wallCentreY, HOLD_CENTRE_Z),
+                    new Vector3(0.3f, wallHeight, HOLD_LENGTH + 0.6f), hullPaint);
+                TestMaterials.Box($"Wall_End_{i}", hold,
+                    new Vector3(0f, wallCentreY, HOLD_CENTRE_Z + i * (HOLD_LENGTH * 0.5f + 0.15f)),
+                    new Vector3(HOLD_WIDTH, wallHeight, 0.3f), hullPaint);
+            }
+
+            BuildHoldLadder(hold, trim);
+
+            // --- water exclusion + the dry-interior registration ---
+            var exclusion = new GameObject("WaterExclusion");
+            exclusion.transform.SetParent(hold, false);
+
+            var excluder = exclusion.AddComponent<WaterExcluder>();
+
+            // The mesh is the interior exactly. Exclusion is depth-tested against the opaque
+            // buffer, so a box that poked out through the hull sides would start rejecting
+            // the open sea alongside the boat as well. Its top is a little above the
+            // waterline so a passing crest cannot spill over the edge of the exclusion.
+            var meshGO = new GameObject("Water Excluder Renderer", typeof(MeshFilter), typeof(MeshRenderer));
+            meshGO.transform.SetParent(exclusion.transform, false);
+            meshGO.transform.localPosition = new Vector3(
+                0f, (HOLD_FLOOR_Y - 0.3f + HOLD_EXCLUSION_TOP_Y) * 0.5f, HOLD_CENTRE_Z);
+            meshGO.transform.localScale = new Vector3(
+                HOLD_WIDTH, HOLD_EXCLUSION_TOP_Y - (HOLD_FLOOR_Y - 0.3f), HOLD_LENGTH);
+
+            var cube = Resources.GetBuiltinResource<Mesh>("Cube.fbx");
+            meshGO.GetComponent<MeshFilter>().sharedMesh = cube;
+            var mr = meshGO.GetComponent<MeshRenderer>();
+            mr.sharedMaterial = AssetDatabase.LoadAssetAtPath<Material>(EXCLUSION_MATERIAL);
+            if (mr.sharedMaterial == null)
+                Debug.LogError($"[WaterBuilder] Water exclusion material missing at {EXCLUSION_MATERIAL}. " +
+                               "The hold will render flooded.");
+            mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            mr.receiveShadows = false;
+
+            // WaterExcluder keeps both of its fields internal, so they can only be written
+            // through the serialized object. Neither is read at runtime - the exclusion pass
+            // just collects renderers using that material - but leaving them empty makes the
+            // component's own inspector claim it has nothing to exclude.
+            var eso = new SerializedObject(excluder);
+            eso.FindProperty("m_ExclusionRenderer").objectReferenceValue = meshGO;
+            eso.FindProperty("m_InternalMesh").objectReferenceValue = cube;
+            eso.ApplyModifiedPropertiesWithoutUndo();
+
+            var dry = exclusion.AddComponent<DryHullVolume>();
+            var dso = new SerializedObject(dry);
+            // Floor to deck underside: no gap on the way up the ladder where the underwater
+            // fog could flick back on for a frame.
+            dso.FindProperty("center").vector3Value = new Vector3(
+                0f, (HOLD_FLOOR_Y + HOLD_CEILING_Y) * 0.5f, HOLD_CENTRE_Z);
+            dso.FindProperty("size").vector3Value = new Vector3(
+                HOLD_WIDTH, HOLD_CEILING_Y - HOLD_FLOOR_Y, HOLD_LENGTH);
+            dso.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        /// <summary>
+        /// Ladder down into the hold, on its aft bulkhead. Local +Z faces into the room, so
+        /// the climber hangs inside it facing the rungs.
+        /// </summary>
+        private static void BuildHoldLadder(Transform hold, Material trim)
+        {
+            var ladderGO = new GameObject("HoldLadder");
+            ladderGO.transform.SetParent(hold, false);
+            ladderGO.transform.localPosition =
+                new Vector3(0f, HOLD_FLOOR_Y, HOLD_CENTRE_Z - HOLD_LENGTH * 0.5f + 0.02f);
+
+            float climb = 0.8f - HOLD_FLOOR_Y;   // floor to the top of the deck
+
+            var grab = ladderGO.AddComponent<BoxCollider>();
+            grab.center = new Vector3(0f, climb * 0.5f, 0.2f);
+            grab.size = new Vector3(0.9f, climb, 0.7f);
+            grab.isTrigger = true;
+
+            for (int i = -1; i <= 1; i += 2)
+                TestMaterials.Box($"Stile_{i}", ladderGO.transform,
+                    new Vector3(i * 0.3f, climb * 0.5f, 0.06f),
+                    new Vector3(0.09f, climb, 0.09f), trim);
+            int rungs = Mathf.RoundToInt(climb / 0.45f);
+            for (int r = 0; r < rungs; r++)
+                TestMaterials.Box($"Rung_{r}", ladderGO.transform,
+                    new Vector3(0f, 0.25f + r * 0.45f, 0.06f),
+                    new Vector3(0.68f, 0.07f, 0.07f), trim);
+
+            var ladder = ladderGO.AddComponent<Ladder>();
+            var so = new SerializedObject(ladder);
+            so.FindProperty("climbHeight").floatValue = climb;
+            so.FindProperty("climbSpeed").floatValue = 2.4f;
+            so.FindProperty("standOffset").vector3Value = new Vector3(0f, 0f, 0.45f);
+            // Out of the hatch and aft onto solid deck, clear of the opening it just left.
+            so.FindProperty("topExitLocal").vector3Value = new Vector3(0f, climb + 0.15f, -0.75f);
+            so.ApplyModifiedPropertiesWithoutUndo();
         }
 
         /// <summary>
@@ -677,7 +850,10 @@ namespace Game.Editor
         {
             var ladderGO = new GameObject("BoardingLadder");
             ladderGO.transform.SetParent(boat, false);
-            ladderGO.transform.localPosition = new Vector3(-2.75f, -2.6f, 1f);
+            // Forward of the hold. Its top exit lands inboard at x=-1.45, which used to be
+            // clear deck and is now the middle of the hatch - climbing aboard from the water
+            // would have dropped you straight down into the hold.
+            ladderGO.transform.localPosition = new Vector3(-2.75f, -2.6f, 5.4f);
             // Local +Z faces outboard to port, so the climber hangs off the outside of the
             // hull and faces in toward the rungs.
             ladderGO.transform.localRotation = Quaternion.Euler(0f, -90f, 0f);

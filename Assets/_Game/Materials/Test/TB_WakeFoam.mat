@@ -12,9 +12,8 @@ Material:
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
   m_ValidKeywords:
-  - _AFFECTS_DEFORMATION
   - _AFFECTS_FOAM
-  - _TYPE_SPHERE
+  - _TYPE_BOX
   m_InvalidKeywords: []
   m_LightmapFlags: 4
   m_EnableInstancingVariants: 0
