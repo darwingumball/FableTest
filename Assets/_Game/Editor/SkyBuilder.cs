@@ -32,6 +32,22 @@ namespace Game.Editor
         private const string MOON_NAME = "Moon";
         private const string MOON_DISC_NAME = "MoonDisc";
 
+        // Real angular diameter is 0.52 degrees, which at a 70 degree field of view is
+        // about four pixels - a dot. Oversizing is the standard game cheat; this is
+        // roughly 17x life size, which is what makes the moon read as a body in the sky
+        // rather than a bright star.
+        private const float MOON_ANGULAR_DIAMETER = 9f;
+        /// <summary>Target disc radiance in cd/m^2, just under the night exposure ceiling.</summary>
+        private const float MOON_DISC_RADIANCE = 515f;
+
+        /// <summary>Intensity that produces <see cref="MOON_DISC_RADIANCE"/> at the current size.</summary>
+        private static float MoonDiscLux()
+        {
+            float halfAngleRad = MOON_ANGULAR_DIAMETER * 0.5f * Mathf.Deg2Rad;
+            float solidAngle = Mathf.PI * halfAngleRad * halfAngleRad;
+            return MOON_DISC_RADIANCE * solidAngle;
+        }
+
         private const int STAR_FACE_SIZE = 512;
         private const int STAR_SEED = 20260728;
         // Roughly how many stars land on the whole sphere. The eye reads density, not
@@ -103,6 +119,18 @@ namespace Game.Editor
         }
 
         /// <summary>
+        /// Counteracts the atmosphere reddening the stars.
+        ///
+        /// PhysicallyBasedSky attenuates space emission by atmospheric transmittance on the
+        /// way down, and Rayleigh scattering removes several times more blue than red. The
+        /// generated texture measured neutral (mean RGB 0.345/0.342/0.344) and still
+        /// rendered amber, so the fix belongs here rather than in the star colours: pre-
+        /// multiplying by the inverse of zenith transmittance (roughly 0.95/0.90/0.78 for a
+        /// clear sky) lands them back on neutral once the sky has taken its cut.
+        /// </summary>
+        private static readonly Color AtmosphericCompensation = new(0.82f, 0.87f, 1f);
+
+        /// <summary>
         /// Star brightness is heavily skewed - a handful of bright ones carry the sky and
         /// the rest are barely there. A flat random gives a uniform dusting that reads as
         /// TV static, so brightness is raised to a power to bias it dim.
@@ -112,13 +140,17 @@ namespace Game.Editor
             float brightness = Mathf.Pow((float)rng.NextDouble(), 3f);
             brightness = Mathf.Lerp(0.12f, 1f, brightness);
 
-            // Real star colour runs blue-white to orange. Keep it subtle: at these sizes
-            // saturated stars look like stuck pixels.
+            // Real star colour runs blue-white to orange, but the warm end is dropped: the
+            // atmosphere already pushes everything warm, so an orange class on top of that
+            // turned the whole field amber. What survives is white to blue-white, which is
+            // what a cold night sky reads as anyway.
             float t = (float)rng.NextDouble();
-            var tint = t < 0.15f ? new Color(0.75f, 0.83f, 1f)
-                     : t > 0.85f ? new Color(1f, 0.85f, 0.70f)
-                     : Color.white;
-            return tint * brightness;
+            var tint = t < 0.25f ? new Color(0.75f, 0.83f, 1f) : Color.white;
+
+            var c = tint * brightness;
+            return new Color(c.r * AtmosphericCompensation.r,
+                             c.g * AtmosphericCompensation.g,
+                             c.b * AtmosphericCompensation.b);
         }
 
         /// <summary>
@@ -229,6 +261,8 @@ namespace Game.Editor
             if (skyGo != null) ConfigureSkyProfile(skyGo, stars);
             else Debug.LogWarning("[SkyBuilder] Sky and Fog Volume not found; stars not assigned.");
 
+            if (sunGo != null) ConfigureSun(sunGo);
+
             if (moonGo == null)
             {
                 moonGo = new GameObject(MOON_NAME);
@@ -270,6 +304,34 @@ namespace Game.Editor
             pbs.spaceRotation.overrideState = true;
 
             EditorUtility.SetDirty(profile);
+        }
+
+        /// <summary>
+        /// Tames the sun's flare.
+        ///
+        /// The sun cannot get the moon's two-light treatment: PhysicallyBasedSky picks the
+        /// light marked interactsWithSky as the source of ALL atmospheric scattering, so
+        /// moving the disc onto a dim child light would leave the daytime sky nearly black.
+        ///
+        /// It does not need it either. The disc itself is 0.5 degrees - four pixels - and
+        /// being unlookably bright is correct for a sun. What was actually eating the
+        /// screen is the flare, which Unity defaults to 2 degrees at full multiplier on top
+        /// of a 40000 lux body. Shrinking it leaves a hard bright sun with a tight halo.
+        /// </summary>
+        private static void ConfigureSun(GameObject sunGo)
+        {
+            if (!sunGo.TryGetComponent<HDAdditionalLightData>(out var hd)) return;
+            var so = new SerializedObject(hd);
+            so.FindProperty("m_InteractsWithSky").boolValue = true;   // required for the sky
+            so.FindProperty("m_AngularDiameter").floatValue = 0.9f;   // slightly oversized
+            // See ConfigureMoon: diameterOverride, not m_AngularDiameter, is what actually
+            // sizes the drawn disc.
+            so.FindProperty("diameterMultiplerMode").boolValue = false;
+            so.FindProperty("diameterOverride").floatValue = 0.9f;
+            so.FindProperty("flareSize").floatValue = 0.55f;
+            so.FindProperty("flareFalloff").floatValue = 7f;
+            so.FindProperty("flareMultiplier").floatValue = 0.12f;
+            so.ApplyModifiedPropertiesWithoutUndo();
         }
 
         /// <summary>
@@ -324,10 +386,13 @@ namespace Game.Editor
             discLight.useColorTemperature = true;
             discLight.colorTemperature = 6800f;
             discLight.shadows = LightShadows.None;
-            // Chosen so radiance (intensity / solid angle) lands just under the night
-            // exposure ceiling: pi * (3.5 deg / 2 in rad)^2 = 2.9e-3 sr, and 1.5 / 2.9e-3
-            // is ~510 cd/m^2 against a ceiling near 600. Bright, but the craters survive.
-            discLight.intensity = 1.5f;
+            // Radiance is intensity / solid angle, and solid angle grows with the SQUARE of
+            // the angular diameter - so the intensity has to track the area or a bigger
+            // moon is simply a dimmer one. This pair keeps radiance just under the night
+            // exposure ceiling (EV100 9 tops out near 600 cd/m^2): pi * (9 deg / 2 in
+            // rad)^2 = 1.94e-2 sr, and 10 / 1.94e-2 is ~515 cd/m^2. Bright, but the craters
+            // survive. Change MOON_ANGULAR_DIAMETER and this scales with it.
+            discLight.intensity = MoonDiscLux();
 
             if (!discGo.TryGetComponent<HDAdditionalLightData>(out var discHd))
                 discHd = discGo.AddComponent<HDAdditionalLightData>();
@@ -341,7 +406,14 @@ namespace Game.Editor
             // Real angular diameter is 0.52 degrees, which at this field of view is a
             // fleck. Oversizing is the standard game cheat and is what makes a night sky
             // feel composed rather than empty.
-            so.FindProperty("m_AngularDiameter").floatValue = 3.5f;
+            so.FindProperty("m_AngularDiameter").floatValue = MOON_ANGULAR_DIAMETER;
+            // m_AngularDiameter alone does NOT size the rendered disc - it is the physical
+            // value, used for shadow softness. The visible size comes from this pair, and
+            // diameterOverride defaults to 0.5, so a body left at the default draws at half
+            // a degree no matter what angular diameter it claims. That default is why the
+            // moon stayed a four-pixel dot through every size change.
+            so.FindProperty("diameterMultiplerMode").boolValue = false;   // absolute degrees
+            so.FindProperty("diameterOverride").floatValue = MOON_ANGULAR_DIAMETER;
             so.FindProperty("m_Distance").floatValue = 3.84e8f;
             so.FindProperty("surfaceTexture").objectReferenceValue = surface;
             so.FindProperty("surfaceTint").colorValue = Color.white;
