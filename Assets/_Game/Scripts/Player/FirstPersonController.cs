@@ -36,6 +36,18 @@ namespace Game.Player
         [SerializeField] private float gravity = -20f;
         [SerializeField] private float coyoteTime = 0.15f;
 
+        [Header("Swimming")]
+        [Tooltip("Horizontal speed while swimming.")]
+        [SerializeField] private float swimSpeed = 3.2f;
+        [Tooltip("Rise rate while the jump key is held.")]
+        [SerializeField] private float swimUpSpeed = 2.6f;
+        [Tooltip("Sink rate when the jump key is NOT held. Deliberately slow - fast enough " +
+                 "to feel like treading water is a choice, slow enough not to be punishing.")]
+        [SerializeField] private float sinkSpeed = 1.1f;
+        [Tooltip("How far the head can rise above the waterline while swimming up. Without " +
+                 "this cap you launch clear of the water like a cork.")]
+        [SerializeField] private float swimSurfaceClamp = 0.25f;
+
         [Header("Crouch")]
         [SerializeField] private float standHeight = 1.9f;
         [SerializeField] private float crouchHeight = 1.2f;
@@ -69,6 +81,9 @@ namespace Game.Player
         private Vector3 _externalMove;
         private bool _controlEnabled = true;
         private bool _lookEnabled = true;
+        private bool _inWater;
+        private float _submersion;
+        private float _waterSurfaceY;
 
         /// <summary>
         /// Re-reads facing from the transform. Call after any external repositioning
@@ -79,6 +94,33 @@ namespace Game.Player
             _yaw = transform.eulerAngles.y;
             transform.rotation = Quaternion.Euler(0f, _yaw, 0f);
         }
+
+        /// <summary>
+        /// Turns the player with a rotating surface underfoot (a boat).
+        ///
+        /// This has to add to the TRACKED yaw, not the transform: ApplyLook rewrites the
+        /// rotation from _yaw every frame, so a rotation written straight to the transform
+        /// is erased on the next frame and the player appears welded to world north while
+        /// the deck turns under them.
+        /// </summary>
+        public void AddYaw(float degrees)
+        {
+            _yaw += degrees;
+            transform.rotation = Quaternion.Euler(0f, _yaw, 0f);
+        }
+
+        /// <summary>
+        /// Reported by <see cref="Game.World.SwimmerProbe"/>. <paramref name="submersion"/>
+        /// is metres of the body below the waterline.
+        /// </summary>
+        public void SetSwimState(bool inWater, float submersion, float surfaceY)
+        {
+            _inWater = inWater;
+            _submersion = submersion;
+            _waterSurfaceY = surfaceY;
+        }
+
+        public bool IsSwimming => _inWater;
 
         private void Awake()
         {
@@ -176,9 +218,17 @@ namespace Game.Player
                 }
             }
 
+            Vector3 wishDirRaw = (transform.right * moveInput.x + transform.forward * moveInput.y);
+            if (wishDirRaw.sqrMagnitude > 1f) wishDirRaw.Normalize();
+
+            if (_inWater)
+            {
+                ApplySwimming(wishDirRaw);
+                return;
+            }
+
             float targetSpeed = (IsSprinting ? sprintSpeed : IsCrouching ? crouchSpeed : walkSpeed) * _speedMultiplier;
-            Vector3 wishDir = (transform.right * moveInput.x + transform.forward * moveInput.y);
-            if (wishDir.sqrMagnitude > 1f) wishDir.Normalize();
+            Vector3 wishDir = wishDirRaw;
             Vector3 targetHorizontal = wishDir * targetSpeed;
 
             Vector3 horizontal;
@@ -207,6 +257,35 @@ namespace Game.Player
             if (grounded && _velocity.y < 0f)
                 _velocity.y = -2f;
             _velocity.y += gravity * Time.deltaTime;
+
+            Vector3 motion = _velocity * Time.deltaTime + _externalMove;
+            _externalMove = Vector3.zero;
+            _controller.Move(motion);
+        }
+
+        /// <summary>
+        /// Swimming. No gravity accumulation and no jump: vertical motion is entirely a
+        /// choice. Hold jump to rise, let go and you sink - slowly, so treading water reads
+        /// as a decision rather than a punishment.
+        /// </summary>
+        private void ApplySwimming(Vector3 wishDir)
+        {
+            Vector3 horizontal = wishDir * (swimSpeed * _speedMultiplier);
+            _velocity.x = horizontal.x;
+            _velocity.z = horizontal.z;
+
+            bool rising = _controlEnabled && _jumpAction.IsPressed();
+            float vertical = rising ? swimUpSpeed : -sinkSpeed;
+
+            // Don't let a held jump fire the player out of the water. Once the body is at
+            // the surface, rising is capped to holding station there.
+            if (rising)
+            {
+                float headroom = _waterSurfaceY + swimSurfaceClamp - transform.position.y;
+                if (headroom <= 0f) vertical = 0f;
+                else vertical = Mathf.Min(vertical, headroom / Mathf.Max(Time.deltaTime, 1e-4f));
+            }
+            _velocity.y = vertical;
 
             Vector3 motion = _velocity * Time.deltaTime + _externalMove;
             _externalMove = Vector3.zero;

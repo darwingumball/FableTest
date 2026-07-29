@@ -11,6 +11,7 @@
         "Unity.InputSystem",
         "Unity.Burst",
         "Unity.Collections",
+        "Unity.Mathematics",
         "Unity.RenderPipelines.HighDefinition.Runtime",
         "Unity.RenderPipelines.Core.Runtime",
         "Unity.TextMeshPro",
