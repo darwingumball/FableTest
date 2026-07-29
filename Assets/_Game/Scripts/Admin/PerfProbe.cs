@@ -38,6 +38,7 @@ namespace Game.Admin
         private readonly HashSet<string> _off = new();
         private readonly List<Light> _disabledLights = new();
         private readonly List<Light> _unshadowedLights = new();
+        private readonly List<HDAdditionalLightData> _unvolumetric = new();
         private readonly List<Renderer> _disabledRenderers = new();
 
         public static PerfProbe Instance
@@ -97,6 +98,7 @@ namespace Game.Admin
             switch (what)
             {
                 case "lights": return probe.SetLights(on);
+                case "vlights": return probe.SetVolumetricLights(on);
                 case "shadows": return probe.SetShadows(on);
                 case "fog": return probe.SetVolumeComponent<Fog>(on, "fog");
                 case "clouds": return probe.SetClouds(on);
@@ -109,7 +111,8 @@ namespace Game.Admin
         }
 
         private const string Usage =
-            "usage: perf | perf reset | perf <lights|shadows|fog|clouds|post|sky|water|snow> on|off";
+            "usage: perf | perf reset | " +
+            "perf <lights|vlights|shadows|fog|clouds|post|sky|water|snow> on|off";
 
         private string Report()
         {
@@ -170,6 +173,36 @@ namespace Game.Admin
             }
             _off.Add("lights");
             return $"punctual lights off ({_disabledLights.Count}); sun and moon left alone";
+        }
+
+        /// <summary>
+        /// Strips volumetric injection from every punctual light without touching the light
+        /// itself, so surfaces stay lit exactly as before and only the fog haze around them
+        /// goes. 29 of this scene's 30 lights inject, and each one is work in the froxel
+        /// volume - this isolates that cost from the lighting it is attached to.
+        /// </summary>
+        private string SetVolumetricLights(bool on)
+        {
+            if (on)
+            {
+                foreach (var hd in _unvolumetric) if (hd != null) hd.affectsVolumetric = true;
+                int n = _unvolumetric.Count;
+                _unvolumetric.Clear();
+                _off.Remove("vlights");
+                return $"volumetric light injection back on ({n})";
+            }
+
+            _unvolumetric.Clear();
+            foreach (var l in FindObjectsByType<Light>(FindObjectsSortMode.None))
+            {
+                var hd = l.GetComponent<HDAdditionalLightData>();
+                if (hd == null || !hd.affectsVolumetric) continue;
+                hd.affectsVolumetric = false;
+                _unvolumetric.Add(hd);
+            }
+            _off.Add("vlights");
+            return $"volumetric injection off on {_unvolumetric.Count} lights " +
+                   "(surfaces still lit; only the haze around them is gone)";
         }
 
         private string SetShadows(bool on)
@@ -282,6 +315,7 @@ namespace Game.Admin
         private string ResetAll()
         {
             SetLights(true);
+            SetVolumetricLights(true);
             SetShadows(true);
             SetVolumeComponent<Fog>(true, "fog");
             SetVolumeComponent<PSXPostProcess>(true, "post");
