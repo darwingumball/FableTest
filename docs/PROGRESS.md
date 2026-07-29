@@ -398,6 +398,22 @@ MapCamera — prefabs cannot store scene references, so that link lives on the i
     the exclusion material) but leaving them empty makes the component's own inspector claim
     it has nothing to exclude.
 
+52. **`Hidden/HDRP/WaterExclusion` is `Cull Back`, so one box only excludes from OUTSIDE it.**
+    This is the big one for interiors. A box around a compartment works perfectly looking
+    down into it from the deck, and does nothing at all once you are standing in the room —
+    every face is back-facing, no stencil is written, and the sea renders straight through
+    at eye level while fog and swimming (which go through `DryHullVolume`) correctly stay
+    off. Fix is a SECOND renderer using an inside-out cube; whichever way the camera is,
+    exactly one of the two survives culling, so they never conflict. Negative scale is not a
+    substitute — Unity flips front-face winding for negatively scaled renderers precisely so
+    geometry keeps facing the same way, cancelling the trick out.
+
+53. **Do not make the exclusion box exactly the interior dimensions.** Coplanar with the
+    bulkheads, `ZTest LEqual` comes down to float rounding and the water tears in and out
+    along the walls. Inset a couple of centimetres. Shrinking costs nothing: seen from
+    inside, a smaller concentric box subtends a *larger* solid angle, so it still covers
+    everything.
+
 50. **A file written externally can land in Unity's asset database but NOT in the compile
     set.** `AssetDatabase.FindAssets` found it, the importer was `MonoImporter`, and
     `GetAssemblyNameFromScriptPath` returned the right assembly — while

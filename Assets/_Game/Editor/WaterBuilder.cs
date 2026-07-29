@@ -38,9 +38,11 @@ namespace Game.Editor
         private const float HOLD_WALL = 0.3f;      // floor and bulkhead thickness
         // Exclusion reaches above the waterline so a crest cannot spill over its top edge.
         private const float HOLD_EXCLUSION_TOP_Y = -0.4f;
+        private const float HOLD_EXCLUSION_INSET = 0.02f;
         private const string EXCLUSION_MATERIAL =
             "Packages/com.unity.render-pipelines.high-definition/Runtime/" +
             "RenderPipelineResources/Material/MaterialWaterExclusion.mat";
+        private const string INVERTED_CUBE = "Assets/_Game/Meshes/InvertedCube.asset";
 
         // Ground spans -50..50. The beach starts at its edge and shelves down to the water.
         private const float SHORE_START_Z = 46f;
@@ -770,34 +772,49 @@ namespace Game.Editor
 
             var excluder = exclusion.AddComponent<WaterExcluder>();
 
-            // The mesh is the interior exactly. Exclusion is depth-tested against the opaque
+            var exclusionMaterial = AssetDatabase.LoadAssetAtPath<Material>(EXCLUSION_MATERIAL);
+            if (exclusionMaterial == null)
+                Debug.LogError($"[WaterBuilder] Water exclusion material missing at {EXCLUSION_MATERIAL}. " +
+                               "The hold will render flooded.");
+
+            // The box is the interior exactly. Exclusion is depth-tested against the opaque
             // buffer, so a box that poked out through the hull sides would start rejecting
             // the open sea alongside the boat as well. Its top is a little above the
             // waterline so a passing crest cannot spill over the edge of the exclusion.
-            var meshGO = new GameObject("Water Excluder Renderer", typeof(MeshFilter), typeof(MeshRenderer));
-            meshGO.transform.SetParent(exclusion.transform, false);
-            meshGO.transform.localPosition = new Vector3(
+            //
+            // Inset a couple of centimetres from the bulkheads. At the interior dimensions
+            // exactly, the box's side faces are COPLANAR with the walls, and exclusion is
+            // drawn ZTest LEqual against the opaque buffer - so whether a pixel gets tagged
+            // comes down to float rounding and the water tears in and out along the walls.
+            // Shrinking loses nothing: seen from inside, a smaller concentric box subtends a
+            // LARGER solid angle, so it still covers everything.
+            var boxCentre = new Vector3(
                 0f, (HOLD_FLOOR_Y - HOLD_WALL + HOLD_EXCLUSION_TOP_Y) * 0.5f, HOLD_CENTRE_Z);
-            meshGO.transform.localScale = new Vector3(
-                HOLD_WIDTH, HOLD_EXCLUSION_TOP_Y - (HOLD_FLOOR_Y - HOLD_WALL), HOLD_LENGTH);
+            var boxSize = new Vector3(
+                HOLD_WIDTH - HOLD_EXCLUSION_INSET * 2f,
+                HOLD_EXCLUSION_TOP_Y - (HOLD_FLOOR_Y - HOLD_WALL),
+                HOLD_LENGTH - HOLD_EXCLUSION_INSET * 2f);
 
-            var cube = Resources.GetBuiltinResource<Mesh>("Cube.fbx");
-            meshGO.GetComponent<MeshFilter>().sharedMesh = cube;
-            var mr = meshGO.GetComponent<MeshRenderer>();
-            mr.sharedMaterial = AssetDatabase.LoadAssetAtPath<Material>(EXCLUSION_MATERIAL);
-            if (mr.sharedMaterial == null)
-                Debug.LogError($"[WaterBuilder] Water exclusion material missing at {EXCLUSION_MATERIAL}. " +
-                               "The hold will render flooded.");
-            mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-            mr.receiveShadows = false;
+            // TWO meshes, one facing each way, because HDRP's exclusion shader is Cull Back.
+            // A single box only tags pixels when it is viewed from OUTSIDE - which covers
+            // looking down the hatch from the deck and nothing else. Stand IN the room and
+            // every face of that box is back-facing, so nothing is written and the sea
+            // renders straight through the hold at eye level. The inward-facing copy is what
+            // makes the room dry from the inside. They never conflict: whichever way the
+            // camera is, exactly one of them survives culling.
+            var outward = AddExclusionMesh(exclusion.transform, "Water Excluder Renderer",
+                Resources.GetBuiltinResource<Mesh>("Cube.fbx"), boxCentre, boxSize, exclusionMaterial);
+            AddExclusionMesh(exclusion.transform, "Water Excluder Renderer (Interior)",
+                InvertedCubeMesh(), boxCentre, boxSize, exclusionMaterial);
 
             // WaterExcluder keeps both of its fields internal, so they can only be written
             // through the serialized object. Neither is read at runtime - the exclusion pass
             // just collects renderers using that material - but leaving them empty makes the
             // component's own inspector claim it has nothing to exclude.
             var eso = new SerializedObject(excluder);
-            eso.FindProperty("m_ExclusionRenderer").objectReferenceValue = meshGO;
-            eso.FindProperty("m_InternalMesh").objectReferenceValue = cube;
+            eso.FindProperty("m_ExclusionRenderer").objectReferenceValue = outward;
+            eso.FindProperty("m_InternalMesh").objectReferenceValue =
+                Resources.GetBuiltinResource<Mesh>("Cube.fbx");
             eso.ApplyModifiedPropertiesWithoutUndo();
 
             var dry = exclusion.AddComponent<DryHullVolume>();
@@ -809,6 +826,52 @@ namespace Game.Editor
             dso.FindProperty("size").vector3Value = new Vector3(
                 HOLD_WIDTH, HOLD_CEILING_Y - HOLD_FLOOR_Y, HOLD_LENGTH);
             dso.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        private static GameObject AddExclusionMesh(Transform parent, string name, Mesh mesh,
+                                                   Vector3 centre, Vector3 size, Material material)
+        {
+            var go = new GameObject(name, typeof(MeshFilter), typeof(MeshRenderer));
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = centre;
+            go.transform.localScale = size;
+
+            go.GetComponent<MeshFilter>().sharedMesh = mesh;
+            var mr = go.GetComponent<MeshRenderer>();
+            mr.sharedMaterial = material;
+            mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            mr.receiveShadows = false;
+            return go;
+        }
+
+        /// <summary>
+        /// A unit cube wound inside-out, so it renders when the camera is INSIDE it.
+        ///
+        /// Negative scale is not a substitute: Unity flips the front-face winding for
+        /// negatively scaled renderers precisely so that geometry keeps facing the same way,
+        /// which cancels the trick out.
+        /// </summary>
+        private static Mesh InvertedCubeMesh()
+        {
+            var existing = AssetDatabase.LoadAssetAtPath<Mesh>(INVERTED_CUBE);
+            if (existing != null) return existing;
+
+            var mesh = Object.Instantiate(Resources.GetBuiltinResource<Mesh>("Cube.fbx"));
+            mesh.name = "InvertedCube";
+
+            var triangles = mesh.triangles;
+            for (int i = 0; i < triangles.Length; i += 3)
+                (triangles[i], triangles[i + 1]) = (triangles[i + 1], triangles[i]);
+            mesh.triangles = triangles;
+
+            var normals = mesh.normals;
+            for (int i = 0; i < normals.Length; i++) normals[i] = -normals[i];
+            mesh.normals = normals;
+            mesh.RecalculateBounds();
+
+            TestMaterials.EnsureFolder(Path.GetDirectoryName(INVERTED_CUBE).Replace('\\', '/'));
+            AssetDatabase.CreateAsset(mesh, INVERTED_CUBE);
+            return mesh;
         }
 
         /// <summary>
