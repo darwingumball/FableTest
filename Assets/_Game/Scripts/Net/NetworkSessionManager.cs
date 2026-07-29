@@ -50,6 +50,27 @@ namespace Game.Net
         public LobbyController Lobby { get; private set; }
         public bool IsBusy { get; private set; }
 
+        /// <summary>
+        /// A string every peer in this session agrees on, and no other session shares.
+        ///
+        /// Used to name the voice channels (see <see cref="VoiceChatService"/>). The lobby
+        /// id is the natural answer because every peer joined through it. Solo has no
+        /// lobby, so it falls back to the auth player id - which is fine precisely because
+        /// nobody else can be in a solo session to disagree with.
+        /// Null before a session exists.
+        /// </summary>
+        public string SessionKey
+        {
+            get
+            {
+                string lobbyId = Lobby?.CurrentLobby?.Id;
+                if (!string.IsNullOrEmpty(lobbyId)) return lobbyId;
+                if (CurrentMode == SessionMode.None) return null;
+                return "solo-" + (Unity.Services.Authentication.AuthenticationService.Instance
+                    ?.PlayerId ?? "local");
+            }
+        }
+
         public event Action<SessionMode> OnSessionStarted;
         public event Action OnSessionEnded;
 

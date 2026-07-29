@@ -1,5 +1,4 @@
 {
-    "version": 1,
     "name": "GameInputActions",
     "maps": [
         {
@@ -119,6 +118,33 @@
                     "type": "Button",
                     "id": "75bdcf10-3d4d-4709-8033-a83676091675",
                     "expectedControlType": "Button",
+                    "processors": "",
+                    "interactions": "",
+                    "initialStateCheck": false
+                },
+                {
+                    "name": "Chat",
+                    "type": "Button",
+                    "id": "b9375cd2-9132-4d97-bc48-69f891d0a70e",
+                    "expectedControlType": "",
+                    "processors": "",
+                    "interactions": "",
+                    "initialStateCheck": false
+                },
+                {
+                    "name": "ChatChannel",
+                    "type": "Button",
+                    "id": "be69edab-8dd7-427e-9901-f31f1ad3df03",
+                    "expectedControlType": "",
+                    "processors": "",
+                    "interactions": "",
+                    "initialStateCheck": false
+                },
+                {
+                    "name": "Voice",
+                    "type": "Button",
+                    "id": "465380b3-a8e2-4455-b52d-1e494c3ec2d2",
+                    "expectedControlType": "",
                     "processors": "",
                     "interactions": "",
                     "initialStateCheck": false
@@ -430,6 +456,39 @@
                     "processors": "",
                     "groups": ";Gamepad",
                     "action": "Pause",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                },
+                {
+                    "name": "",
+                    "id": "251030ac-cb20-4769-a790-ab1a5e1ed978",
+                    "path": "<Keyboard>/enter",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "Keyboard&Mouse",
+                    "action": "Chat",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                },
+                {
+                    "name": "",
+                    "id": "f1c9f31e-14b2-4d1a-ba4a-8ce1c6b5adc4",
+                    "path": "<Keyboard>/y",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "Keyboard&Mouse",
+                    "action": "ChatChannel",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                },
+                {
+                    "name": "",
+                    "id": "11726763-c234-4990-a8b6-61a1104dfebd",
+                    "path": "<Keyboard>/v",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "Keyboard&Mouse",
+                    "action": "Voice",
                     "isComposite": false,
                     "isPartOfComposite": false
                 }
