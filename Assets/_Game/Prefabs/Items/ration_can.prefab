@@ -18,6 +18,7 @@ GameObject:
   - component: {fileID: 8571440801020530732}
   - component: {fileID: 4287935215998363975}
   - component: {fileID: 2421885165447936150}
+  - component: {fileID: 5277293998644607871}
   m_Layer: 0
   m_Name: ration_can
   m_TagString: Untagged
@@ -155,8 +156,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  GlobalObjectIdHash: 3271873721
-  InScenePlacedSourceGlobalObjectIdHash: 0
+  GlobalObjectIdHash: 2838465473
+  InScenePlacedSourceGlobalObjectIdHash: 1544203985
   DeferredDespawnTick: 0
   Ownership: 1
   AlwaysReplicateAsRoot: 0
@@ -165,7 +166,7 @@ MonoBehaviour:
   SceneMigrationSynchronization: 0
   SpawnWithObservers: 1
   DontDestroyWithOwner: 0
-  AutoObjectParentSync: 1
+  AutoObjectParentSync: 0
   SyncOwnerTransformWhenParented: 1
   AllowOwnerToParent: 0
 --- !u!114 &4397505140606974928
@@ -255,6 +256,19 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 00abedb9bcfbb014eaa981bd7d46c9f5, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  ShowTopMostFoldoutHeaderGroup: 1
+--- !u!114 &5277293998644607871
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4776007057870251972}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3233316370546124c9186d341eda09f1, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1

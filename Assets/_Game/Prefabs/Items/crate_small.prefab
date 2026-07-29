@@ -18,6 +18,8 @@ GameObject:
   - component: {fileID: 8743588086571691069}
   - component: {fileID: 3985987895227035470}
   - component: {fileID: 8984224564095482767}
+  - component: {fileID: 2631558408191559151}
+  - component: {fileID: 3083574500393391077}
   m_Layer: 0
   m_Name: crate_small
   m_TagString: Untagged
@@ -153,8 +155,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  GlobalObjectIdHash: 3271873721
-  InScenePlacedSourceGlobalObjectIdHash: 0
+  GlobalObjectIdHash: 3283941622
+  InScenePlacedSourceGlobalObjectIdHash: 3813554410
   DeferredDespawnTick: 0
   Ownership: 1
   AlwaysReplicateAsRoot: 0
@@ -163,7 +165,7 @@ MonoBehaviour:
   SceneMigrationSynchronization: 0
   SpawnWithObservers: 1
   DontDestroyWithOwner: 0
-  AutoObjectParentSync: 1
+  AutoObjectParentSync: 0
   SyncOwnerTransformWhenParented: 1
   AllowOwnerToParent: 0
 --- !u!114 &7316962699603032219
@@ -256,3 +258,37 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
+--- !u!114 &2631558408191559151
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4354267895132967052}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3233316370546124c9186d341eda09f1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  ShowTopMostFoldoutHeaderGroup: 1
+--- !u!114 &3083574500393391077
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4354267895132967052}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6cf2c7c125e2b5c4db2473929575e1f6, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  probes:
+  - {x: -0.4, y: 0, z: -0.4}
+  - {x: 0.4, y: 0, z: -0.4}
+  - {x: -0.4, y: 0, z: 0.4}
+  - {x: 0.4, y: 0, z: 0.4}
+  buoyancy: 2.2
+  submersionRamp: 0.6
+  waterDrag: 2.5
+  waterAngularDrag: 1.5

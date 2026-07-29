@@ -1,0 +1,28 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7922c4748938266479e17286a2750deb, type: 3}
+  m_Name: jerry_can
+  m_EditorClassIdentifier: 
+  itemId: jerry_can
+  displayName: Jerry Can
+  description: Twenty litres of diesel and a bent spout.
+  statsText: 'Fuel: 20 L
+
+    Flammable'
+  gridWidth: 2
+  gridHeight: 2
+  maxStack: 1
+  weightKg: 18
+  icon: {fileID: 0}
+  iconTint: {r: 0.24, g: 0.3, b: 0.2, a: 1}
+  worldPrefab: {fileID: 2927271491601602817, guid: d79cd36f074c0f44aa91601cd673a82b, type: 3}
+  previewPrefab: {fileID: 0}

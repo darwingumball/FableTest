@@ -1,6 +1,7 @@
 using Game.Interaction;
 using Game.Inventory;
 using Game.Net;
+using Game.World;
 using Unity.Netcode;
 using Unity.Netcode.Components;
 using UnityEditor;
@@ -35,13 +36,16 @@ namespace Game.Editor
             public Color color;
             public PrimitiveType primitive;
             public Vector3 scale;
+            /// <summary>Gets a <see cref="Buoyancy"/>. A wrench does not.</summary>
+            public bool floats;
         }
 
         private static readonly ItemDef[] Defs =
         {
             new() { id = "crate_small", name = "Supply Crate", desc = "A battered supply crate. Something rattles inside.",
                     stats = "Sturdy", w = 2, h = 2, stack = 1, mass = 6f,
-                    color = new Color(0.45f, 0.33f, 0.20f), primitive = PrimitiveType.Cube, scale = new Vector3(0.4f, 0.4f, 0.4f) },
+                    color = new Color(0.45f, 0.33f, 0.20f), primitive = PrimitiveType.Cube, scale = new Vector3(0.4f, 0.4f, 0.4f),
+                    floats = true },
             new() { id = "ration_can", name = "Canned Rations", desc = "Expired long before the incident. Edible, technically.",
                     stats = "Restores hunger (later)", w = 1, h = 1, stack = 5, mass = 0.5f,
                     color = new Color(0.42f, 0.45f, 0.28f), primitive = PrimitiveType.Cylinder, scale = new Vector3(0.12f, 0.09f, 0.12f) },
@@ -50,7 +54,23 @@ namespace Game.Editor
                     color = new Color(0.55f, 0.55f, 0.58f), primitive = PrimitiveType.Capsule, scale = new Vector3(0.08f, 0.22f, 0.08f) },
             new() { id = "fuel_barrel", name = "Fuel Barrel", desc = "Half full. Sloshes ominously when carried.",
                     stats = "Heavy - slows you down\nFlammable", w = 2, h = 2, stack = 1, mass = 20f,
-                    color = new Color(0.55f, 0.16f, 0.13f), primitive = PrimitiveType.Cylinder, scale = new Vector3(0.4f, 0.3f, 0.4f) },
+                    color = new Color(0.55f, 0.16f, 0.13f), primitive = PrimitiveType.Cylinder, scale = new Vector3(0.4f, 0.3f, 0.4f),
+                    floats = true },
+            // The small fuel container, alongside the barrel. Sealed, so it floats - dropping
+            // one over the side should be a recoverable mistake rather than a lost tank of
+            // diesel. The fuel SYSTEM (generators, ship tanks, consumption) is not built yet;
+            // this is the item it will consume.
+            new() { id = "jerry_can", name = "Jerry Can", desc = "Twenty litres of diesel and a bent spout.",
+                    stats = "Fuel: 20 L\nFlammable", w = 2, h = 2, stack = 1, mass = 18f,
+                    color = new Color(0.24f, 0.30f, 0.20f), primitive = PrimitiveType.Cube, scale = new Vector3(0.19f, 0.46f, 0.34f),
+                    floats = true },
+            // Deliberately the biggest thing in the list. The crane needs a load that reads as
+            // a load from the wheelhouse roof twenty metres away, and a 40 cm crate does not -
+            // a pot you can see swinging is the whole point of watching a crane work.
+            new() { id = "crab_trap", name = "Crab Pot", desc = "Steel frame, tarred netting, one bait jar. Smells accordingly.",
+                    stats = "Bulky - crane or two hands\nFloats, just about", w = 3, h = 3, stack = 1, mass = 34f,
+                    color = new Color(0.28f, 0.30f, 0.26f), primitive = PrimitiveType.Cube, scale = new Vector3(0.95f, 0.6f, 0.95f),
+                    floats = true },
         };
 
         [MenuItem("Game/Setup/Build Items")]
@@ -123,7 +143,12 @@ namespace Game.Editor
             rb.mass = def.mass;
             rb.interpolation = RigidbodyInterpolation.Interpolate;
 
-            Ensure<NetworkObject>(root);
+            var netObject = Ensure<NetworkObject>(root);
+            // CargoAttachment parents cargo to a deck or a hook OUTSIDE of NGO, deliberately -
+            // see the class summary for why. NGO would otherwise try to replicate that
+            // parenting and then undo it, and log a warning per crate while it did.
+            netObject.AutoObjectParentSync = false;
+
             var nt = Ensure<NetworkTransform>(root);
             nt.AuthorityMode = NetworkTransform.AuthorityModes.Owner;
             nt.Interpolate = true;
@@ -134,6 +159,17 @@ namespace Game.Editor
             worldItem.itemData = data;
             worldItem.quantity = 1;
             Ensure<WorldItemNetworkSync>(root);
+
+            // Every item can be lashed down or hung off a hook - including the small ones,
+            // because the same mechanism is what will let handheld things be set on a desk.
+            Ensure<CargoAttachment>(root);
+
+            if (def.floats) Ensure<Buoyancy>(root);
+            else
+            {
+                var stray = root.GetComponent<Buoyancy>();
+                if (stray != null) Object.DestroyImmediate(stray);
+            }
 
             var saved = PrefabUtility.SaveAsPrefabAsset(root, prefabPath);
             Object.DestroyImmediate(root);
@@ -178,6 +214,17 @@ namespace Game.Editor
                 new WorldItemManager.ScatterEntry { itemId = "ration_can", count = 2, position = new Vector3(3.4f, 0.5f, 2.6f) },
                 new WorldItemManager.ScatterEntry { itemId = "wrench_large", count = 1, position = new Vector3(4.2f, 0.5f, 3.8f) },
                 new WorldItemManager.ScatterEntry { itemId = "fuel_barrel", count = 1, position = new Vector3(5f, 0.7f, 2.8f) },
+
+                // Gear in the water either side of the crab boat (moored at x=11, z=80), well
+                // inside the crane's reach. Dropped a little above the surface so they settle
+                // and float rather than starting half-sunk. Fishing these aboard is the crane
+                // test; see CrabBoatBuilder.
+                new WorldItemManager.ScatterEntry { itemId = "crab_trap", count = 1, position = new Vector3(5.5f, -2.4f, 77.5f) },
+                new WorldItemManager.ScatterEntry { itemId = "crab_trap", count = 1, position = new Vector3(4.5f, -2.4f, 82f) },
+                new WorldItemManager.ScatterEntry { itemId = "crab_trap", count = 1, position = new Vector3(17.5f, -2.4f, 79f) },
+                new WorldItemManager.ScatterEntry { itemId = "crate_small", count = 1, position = new Vector3(17f, -2.4f, 84f) },
+                new WorldItemManager.ScatterEntry { itemId = "fuel_barrel", count = 1, position = new Vector3(6f, -2.4f, 85f) },
+                new WorldItemManager.ScatterEntry { itemId = "jerry_can", count = 1, position = new Vector3(3.9f, 0.5f, 2.2f) },
             };
 
             EditorSceneManager.MarkSceneDirty(scene);

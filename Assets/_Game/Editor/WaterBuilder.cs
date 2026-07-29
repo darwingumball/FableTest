@@ -53,7 +53,10 @@ namespace Game.Editor
 
         // Ground spans -50..50. The beach starts at its edge and shelves down to the water.
         private const float SHORE_START_Z = 46f;
-        private const float WATER_LEVEL = -3.2f;
+        // Shared with CrabBoatBuilder, which has to moor at the same water level and steer
+        // inside the same quad. Two copies of these numbers would drift apart on the first
+        // time anyone resized the lake.
+        internal const float WATER_LEVEL = -3.2f;
         private const float BEACH_LENGTH = 26f;   // z 46 -> 72, dropping to the water level
         private const float SHORE_WIDTH = 220f;
         private const float LAKE_DEPTH = 7f;      // waterline to lake bed
@@ -61,8 +64,8 @@ namespace Game.Editor
         // The water is deliberately enormous. "Rough about 300 m out" needs 300 m of open
         // water to actually be out in, and the shore is at z=72, so anything smaller would
         // put the storm belt against the far edge of the quad.
-        private const float WATER_SPAN = 1200f;
-        private const float LAKE_CENTRE_Z = 620f;   // spans z 20..1220
+        internal const float WATER_SPAN = 1200f;
+        internal const float LAKE_CENTRE_Z = 620f;   // spans z 20..1220
         private static readonly Vector3 LakeCentre = new(0f, WATER_LEVEL, LAKE_CENTRE_Z);
 
         // Roughness gradient, in world Z. Calm out to CALM_END_Z, fully open water from
@@ -86,14 +89,23 @@ namespace Game.Editor
 
         // _TYPE on that graph. Sphere and Box are plain shapes; BowWave is the V-shaped
         // swell HDRP provides specifically for the front of a moving hull.
-        private const float DECAL_SPHERE = 0f;
+        internal const float DECAL_SPHERE = 0f;
         private const float DECAL_BOX = 1f;
-        private const float DECAL_BOW_WAVE = 2f;
+        internal const float DECAL_BOW_WAVE = 2f;
 
         // Close in, so the boat is a short swim from the beach. From here you drive it out
         // into the weather yourself.
         private static readonly Vector3 BoatCourseCentre = new(0f, 0f, 128f);
         private const float BOAT_COURSE_RADIUS = 22f;
+
+        // ...and moored right there rather than running the course, because a test boat you
+        // have to chase across the bay is a test boat that does not get tested. The patrol
+        // course above is still authored and still works: `moored` only holds station until
+        // someone takes the wheel, and clearing it in the inspector puts the boat back on its
+        // lap. Port side is the boarding ladder, so the hull is angled bow-out to sea with
+        // that side toward the beach.
+        internal static readonly Vector3 BoatMooring = new(-12f, 0f, 78f);
+        private const float BOAT_MOORING_HEADING = 16f;
 
         [MenuItem("Game/Setup/Build Water")]
         public static void Build()
@@ -235,7 +247,7 @@ namespace Game.Editor
         /// graph. The component rejects anything whose shader is not a water decal subtarget,
         /// so this cannot be an ordinary Lit material.
         /// </summary>
-        private static Material DecalMaterial(string name, float type, bool deformation,
+        internal static Material DecalMaterial(string name, float type, bool deformation,
                                               bool foam, System.Action<Material> configure = null)
         {
             var shader = AssetDatabase.LoadAssetAtPath<Shader>(DECAL_SHADER);
@@ -269,7 +281,7 @@ namespace Game.Editor
         /// Attaches a decal. Position is in the parent's local space; only XZ matters, since
         /// a decal is projected straight down onto the water.
         /// </summary>
-        private static WaterDecal AddDecal(Transform parent, string name, Material material,
+        internal static WaterDecal AddDecal(Transform parent, string name, Material material,
                                      Vector3 localPos, Vector2 regionSize, float amplitude,
                                      float surfaceFoam = 1f, float deepFoam = 1f)
         {
@@ -517,7 +529,8 @@ namespace Game.Editor
         {
             var boat = new GameObject(BOAT_NAME);
             SceneManager.MoveGameObjectToScene(boat, scene);
-            boat.transform.position = BoatCourseCentre + new Vector3(BOAT_COURSE_RADIUS, 0f, 0f);
+            boat.transform.SetPositionAndRotation(BoatMooring,
+                Quaternion.Euler(0f, BOAT_MOORING_HEADING, 0f));
 
             // Needed only because the boat became drivable. Autopilot replicates nothing at
             // all; a hull steered by a human has to have an owner, and that is the server.
@@ -653,10 +666,24 @@ namespace Game.Editor
             wso.FindProperty("washAmplitude").floatValue = 0.22f;
             wso.ApplyModifiedPropertiesWithoutUndo();
 
-            var motion = boat.AddComponent<BoatMotion>();
+            // GET or add, never blindly add. BoatWake above and BoatRiderCarry below both
+            // [RequireComponent] BoatMotion, so adding either of them has ALREADY put one on
+            // the hull with default values - and AddComponent here then left a SECOND one.
+            //
+            // Two of them is not a cosmetic duplicate: both write the transform in LateUpdate
+            // every frame, and the stray one has no helm reference and is not moored, so it
+            // drives the boat round BoatMotion's default patrol circle while the configured one
+            // holds the mooring. Which of the two you actually got came down to component
+            // order. Every tug built before 2026-07-29 shipped with this.
+            var motion = boat.GetComponent<BoatMotion>();
+            if (motion == null) motion = boat.AddComponent<BoatMotion>();
+
             var so = new SerializedObject(motion);
             so.FindProperty("helm").objectReferenceValue = helm;
             so.FindProperty("hullVisual").objectReferenceValue = hull;
+            // Holds the authored pose and only answers the waves - until someone takes the
+            // wheel, which overrides mooring outright. See BoatMotion.
+            so.FindProperty("moored").boolValue = true;
             so.FindProperty("courseCentre").vector3Value = BoatCourseCentre;
             so.FindProperty("courseRadius").floatValue = BOAT_COURSE_RADIUS;
             so.FindProperty("lapSeconds").floatValue = 110f;

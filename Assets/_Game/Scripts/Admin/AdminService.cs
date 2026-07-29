@@ -264,7 +264,8 @@ namespace Game.Admin
                 case "goto":
                 {
                     if (args.Length < 2)
-                        return "usage: goto <storefront|warehouse|street|shore|sea|spawn>";
+                        return "usage: goto <storefront|warehouse|street|shore|sea|" +
+                               "tug|crabboat|spawn>";
                     Vector3 target;
                     switch (args[1].ToLowerInvariant())
                     {
@@ -275,6 +276,13 @@ namespace Game.Admin
                         // the beach, and well out on the water looking back at the land.
                         case "shore": target = new Vector3(0f, 1f, 60f); break;
                         case "sea": target = new Vector3(0f, -2f, 250f); break;
+                        // Straight onto the working deck of each boat, aft of anything you
+                        // could land on top of. These are fixed world points computed from the
+                        // moorings in WaterBuilder and CrabBoatBuilder: drive a boat away and
+                        // its deck goes with it, which is what the boarding ladders are for.
+                        // Y is water level (-3.2) plus freeboard plus deck height plus a step.
+                        case "tug": target = new Vector3(-12.8f, -0.7f, 75.1f); break;
+                        case "crabboat": target = new Vector3(12.9f, -0.6f, 72.2f); break;
                         case "spawn": target = new Vector3(0f, 1f, 0f); break;
                         default: return $"Unknown location '{args[1]}'.";
                     }
@@ -403,14 +411,15 @@ namespace Game.Admin
             "  light list                             groups, counts, current scale\n" +
             "Performance (local only - measures YOUR machine, changes only YOUR picture):\n" +
             "  perf                                   frame ms, draws, tris, live lights\n" +
-            "  perf <lights|shadows|fog|post|sky|water|snow> on|off\n" +
+            "  perf <lights|vlights|shadows|fog|clouds|post|sky|water|snow> on|off\n" +
             "  perf reset                             put everything back\n" +
             "Player:\n" +
-            "  goto <storefront|warehouse|street|shore|sea|spawn>\n" +
+            "  goto <storefront|warehouse|street|shore|sea|tug|crabboat|spawn>\n" +
             "  tp <x> <y> <z>\n" +
             "  speed <multiplier>                     1 = normal\n" +
             "  heal\n" +
-            "  give <itemId> [count]                  crate_small|ration_can|wrench_large|fuel_barrel\n" +
+            "  give <itemId> [count]                  crate_small|ration_can|wrench_large|\n" +
+            "                                         fuel_barrel|crab_trap\n" +
             "Session:\n" +
             "  quest <accept|complete> <questId>\n" +
             "  players\n" +

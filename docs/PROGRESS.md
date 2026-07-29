@@ -455,6 +455,98 @@ MapCamera — prefabs cannot store scene references, so that link lives on the i
     four slabs carved around the hold's outer shell (not its interior, so the hold's own
     walls fill that 30 cm rather than z-fighting with hull sitting in the same space).
 
+55. **`[RequireComponent]` means `AddComponent` ORDER decides whether you get one component
+    or two, and it fails silently.** `BoatWake` and `BoatRiderCarry` both
+    `[RequireComponent(typeof(BoatMotion))]`. `WaterBuilder` added `BoatWake` first, which
+    auto-created a defaults-only `BoatMotion`, and then called `AddComponent<BoatMotion>()`
+    itself — so **every tug built before 2026-07-29 shipped with two of them**. That is not a
+    cosmetic duplicate: both write `transform.SetPositionAndRotation` in `LateUpdate`, and the
+    stray one has `helm = null` and `moored = false`, so it drove the hull around
+    `BoatMotion`'s *default* patrol circle (centre 0,0,150, radius 38) while the configured one
+    held the mooring. Which one you actually saw came down to component order on the object.
+    Nothing logged, and it survived a `Full Project Setup`.
+
+    Builders now GET-or-add anything another component might have required, and `CrabBoatBuilder`
+    adds `BoatMotion` before `BoatRiderCarry` deliberately. **When a builder adds several
+    components to one object, check the component count on the result, not just the values** —
+    a `SerializedObject` read of "the" component returns whichever comes first, which is how
+    this hid: `moored` read back as `false` from the stray copy while the real one said `true`.
+
+56. **Cargo attachment is deliberately OUTSIDE NGO parenting, and needs
+    `AutoObjectParentSync = false` to stay that way.** `CargoAttachment` replicates only a
+    claim — "I am on anchor N of network object H, at this local pose" — and every peer applies
+    it by parenting locally. Nothing per-frame goes on the wire. That is not an optimisation,
+    it is a correctness requirement: `BoatMotion` replicates *nothing* (the hull is a function
+    of server time), so a crate synced by absolute world position would be fighting a boat that
+    each peer computes for itself, and would visibly lag the deck it is bolted to. With
+    `AutoObjectParentSync` left at its default `true`, NGO tries to replicate and then undo that
+    parenting and warns once per crate.
+
+    While attached, `NetworkTransform`, `NetworkRigidbody` and `Buoyancy` are all switched off
+    and the body goes kinematic — the object is not networked physics in any sense until it is
+    released.
+
+57. **An anchor's network identity is its hierarchy INDEX, not an authored id.**
+    `CargoAnchor.Index` is its position in `host.GetComponentsInChildren<CargoAnchor>(true)`,
+    recomputed on demand rather than cached in `Awake` — cargo routinely resolves an anchor
+    before that anchor's `Awake` has run, because a late joiner receives the crate and the boat
+    it is lashed to in whatever order the spawn messages arrive. A hand-assigned id would drift
+    out of sync the first time a builder regenerated the vessel; an index cannot, because every
+    peer walks the same scene file. **The cost: inserting an anchor into the middle of a
+    hierarchy renumbers everything after it**, so anything holding a saved index (saves, later)
+    must be migrated when a vessel's anchor list changes.
+
+58. **Never read a component off a scene you have just closed.** `EditorSceneManager.CloseScene`
+    destroys the objects, so a `Debug.Log` at the end of a builder that reports
+    `zone.Index` throws `MissingReferenceException` *after* the scene has already been saved
+    correctly — the build succeeded and the tool call reported failure. Capture anything you
+    want to log before `SaveScene`/`CloseScene`.
+
+
+## Cargo, cranes and placement (2026-07-29)
+
+One mechanism serves the crane hook, the deck lashing area, and (next) furniture on a
+property, because from the cargo's point of view they are the same thing: "stop being physics,
+ride this transform instead".
+
+| Script | Role |
+|---|---|
+| `CargoAnchor` | Base for anywhere cargo attaches. Owns network identity (host + index) and the live list of what is riding it. |
+| `PlacementZone : CargoAnchor` | A region on a deck or floor. Snaps, validates, draws a border. |
+| `CraneHook : CargoAnchor` | The block on the rope. Reports what is in reach; never decides. |
+| `CargoAttachment` | On the cargo. Replicates the claim; applies it locally on every peer. |
+| `PlacementGhost` | The green/red preview. Local-only, one per machine. |
+| `CargoBounds` | True size of an object in its own frame, in metres. |
+| `CraneController` | Server-authoritative rig: three floats on the wire. |
+
+**Entering a zone attaches nothing.** It only produces a *plan* — a snapped pose plus a
+green/red verdict — which the carrier previews and commits on RELEASE. Released on red, cargo
+stays loose and falls where it is. `PlacementZone.Plan` is pure and deterministic: the carrying
+client calls it every frame for the ghost, and the server calls it once on release to decide
+what actually happens, so both reach the same answer without the client being trusted for the
+result.
+
+Design notes that cost thought:
+
+- **Yaw snaps to 90° of the zone's own heading.** Cargo lashed askew on a deck reads as a
+  mistake, and a square footprint makes the overlap test exact instead of conservative.
+- **Rest height is a downward box sweep, not a fixed deck height.** Stacking then falls out for
+  free — the second crate lands on the first one's lid.
+- **The overlap test is shrunk to 0.9.** At full size the box is exactly touching whatever it is
+  resting on, so every legal placement would report itself blocked by its own support.
+- **The hook takes a load by its TOP face and levels it.** A crate coming off the water is
+  usually lying at an angle, and a crane straightening it out as it comes up is both what
+  happens and what looks right.
+- **Auto-grab only ever takes LOOSE cargo.** Anything already lashed into a zone was put there
+  deliberately, so unlashing it needs Space — otherwise swinging the hook across a loaded deck
+  would strip it.
+- **Cargo on the hook does not swing.** A pendulum would mean networked physics on a moving
+  vessel, which this project has refused everywhere else. It becomes a real dynamic body the
+  instant it is released, which is what makes dropping a pot over the side work.
+- **The crane is on the LEVEL root, not the rolling hull.** Its console has to stay under the
+  crosshair (gotcha 34) and its rope has to hang plumb. `ApplyRig` resolves "down" through
+  `InverseTransformDirection` anyway, so it stays correct if that ever changes.
+
 
 ## Performance: measured, not assumed (2026-07-28)
 
@@ -720,6 +812,45 @@ a second, tilting set of walls inside the level ones.
 The boarding ladder moved forward to z=5.4. Its top exit lands inboard at x=−1.45, which
 used to be clear deck and is now the middle of the hatch — climbing aboard from the water
 would have dropped you straight down into the hold.
+
+
+### The crabber, and both boats moored (2026-07-29)
+
+`Game/Setup/Build Crab Boat` → `TestCrabBoat`. Twenty metres by 6.4, wheelhouse forward with a
+walk-in doorway aft, and the rest of it open working deck. Its own generator rather than a
+second mode of `WaterBuilder`, because that one carries a heavily tuned tug with a
+below-waterline hold and two water-exclusion meshes; parameterising it into two vessels would
+put both at risk every time either changed.
+
+Both boats are now **moored off the beach** (tug at (−12, 78), crabber at (11, 80)) instead of
+running patrol circles. A test boat you have to chase is a test boat that does not get tested.
+`BoatMotion` now checks the **helm before `moored`** — mooring is a default heading, not a
+restraint, and a moored boat that refused to be driven would be scenery. `goto tug` and
+`goto crabboat` land on each working deck.
+
+Layout numbers worth keeping (all boat-local, deck top at 0.80 to match the tug so stepping
+between the two does not change height):
+
+- Crane pedestal at (2.6, 0.80, 2.6), starboard against the wheelhouse, 11.5 m boom.
+- Lashing area centred (−0.4, 2.20, −3.0), 4.8 × 7.6 m, bottom flush with the deck.
+- **Reach was the constraint on both.** Far corner of the area is 10.8 m from the pedestal
+  against 11.4 m of reach at minimum elevation; the near corner is 1.9 m against 1.6 m at
+  maximum. `luffMax` went 78° → 82° specifically because at 78° the nearest metre and a half
+  was unreachable — which is exactly where a busy deck stacks things.
+- Slew is limited to ±100° so the boom cannot swing through the wheelhouse at low elevation.
+- Crane controls are on the **wheelhouse roof**, not the pedestal: from up there the operator
+  can see the whole working deck and both rails, which is the only spot on this boat where the
+  job is doable. Reached by a second ladder up the aft face.
+
+The **`Solid()` helper** is the pattern for anything both seen and walked on: the visual goes on
+the rolling hull child, a matching invisible `BoxCollider` goes on the level root. The mismatch
+between them is the roll angle — a few degrees in ordinary water, which is the same trade the
+deck itself has always made (gotcha 33 and `BoatMotion`'s class summary).
+
+Deck lights are **point lights, not shadowed spots**, on purpose: the cached shadow atlas that
+everything ashore now uses would bake this boat's shadows at the mooring and leave them there,
+and an every-frame shadow map on a moving vessel is exactly the cost that was just taken out
+of the town.
 
 
 ## Admin console

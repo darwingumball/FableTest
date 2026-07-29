@@ -18,6 +18,8 @@ GameObject:
   - component: {fileID: 6904642131368058006}
   - component: {fileID: 3522632933236257948}
   - component: {fileID: 9008488742506864850}
+  - component: {fileID: 881595269658524753}
+  - component: {fileID: 7658342927882121580}
   m_Layer: 0
   m_Name: fuel_barrel
   m_TagString: Untagged
@@ -155,8 +157,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  GlobalObjectIdHash: 3271873721
-  InScenePlacedSourceGlobalObjectIdHash: 0
+  GlobalObjectIdHash: 2331829860
+  InScenePlacedSourceGlobalObjectIdHash: 1532990069
   DeferredDespawnTick: 0
   Ownership: 1
   AlwaysReplicateAsRoot: 0
@@ -165,7 +167,7 @@ MonoBehaviour:
   SceneMigrationSynchronization: 0
   SpawnWithObservers: 1
   DontDestroyWithOwner: 0
-  AutoObjectParentSync: 1
+  AutoObjectParentSync: 0
   SyncOwnerTransformWhenParented: 1
   AllowOwnerToParent: 0
 --- !u!114 &9028902774229522426
@@ -258,3 +260,37 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
+--- !u!114 &881595269658524753
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3819830513477836824}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3233316370546124c9186d341eda09f1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  ShowTopMostFoldoutHeaderGroup: 1
+--- !u!114 &7658342927882121580
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3819830513477836824}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6cf2c7c125e2b5c4db2473929575e1f6, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  probes:
+  - {x: -0.4, y: 0, z: -0.4}
+  - {x: 0.4, y: 0, z: -0.4}
+  - {x: -0.4, y: 0, z: 0.4}
+  - {x: 0.4, y: 0, z: 0.4}
+  buoyancy: 2.2
+  submersionRamp: 0.6
+  waterDrag: 2.5
+  waterAngularDrag: 1.5

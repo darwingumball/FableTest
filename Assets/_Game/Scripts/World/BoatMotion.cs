@@ -34,7 +34,11 @@ namespace Game.World
 
         [Header("Course (pure function of server time)")]
         [Tooltip("Moored: hold the authored position and heading and only respond to the " +
-                 "waves. Used by the main menu harbour, where the boat is scenery.")]
+                 "waves. Used by the main menu harbour, where the boat is scenery, and by the " +
+                 "test boats, which are moored off the beach so they can be walked onto " +
+                 "rather than chased.\n\n" +
+                 "Taking the wheel overrides this - mooring means 'hold station until someone " +
+                 "drives me', not 'cannot be driven'.")]
         [SerializeField] private bool moored;
         [Tooltip("Centre of the patrol circle, world space.")]
         [SerializeField] private Vector3 courseCentre = new(0f, 0f, 150f);
@@ -107,18 +111,21 @@ namespace Game.World
             Vector3 target;
             Vector3 tangent;
 
-            if (moored)
-            {
-                target = _mooring.position;
-                tangent = _mooring.rotation * Vector3.forward;
-            }
-            else if (helm != null && helm.HasControl)
+            // The helm is checked FIRST, ahead of mooring. A human at the wheel outranks both
+            // the mooring and the patrol course: mooring is a default heading, not a
+            // restraint, and a moored boat that refused to be driven would be scenery.
+            if (helm != null && helm.HasControl)
             {
                 // Driven: the server integrates the hull and every peer eases onto the
                 // replicated result. See BoatHelm for why this cannot stay a function of
                 // time once a human is steering.
                 target = helm.Position;
                 tangent = helm.Forward;
+            }
+            else if (moored)
+            {
+                target = _mooring.position;
+                tangent = _mooring.rotation * Vector3.forward;
             }
             else
             {

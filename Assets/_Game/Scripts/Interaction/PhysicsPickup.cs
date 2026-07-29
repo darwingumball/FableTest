@@ -1,5 +1,6 @@
 using Game.Net;
 using Game.UI;
+using Game.World;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -10,6 +11,11 @@ namespace Game.Interaction
     /// a spring-damper, scroll to adjust distance, Throw to launch. Networked items get
     /// ownership transferred while held (forces only work on a dynamic body we own).
     /// Runs only on the owning player.
+    ///
+    /// Holding cargo over a <see cref="PlacementZone"/> also previews lashing it down, and
+    /// releasing on a green preview commits it - the same mechanism the crane uses, so a
+    /// barrel carried aboard by hand ends up in exactly the state one craned aboard does.
+    /// Releasing on red just drops it, which is what makes the preview worth reading.
     /// </summary>
     public class PhysicsPickup : MonoBehaviour
     {
@@ -40,6 +46,15 @@ namespace Game.Interaction
 
         private Rigidbody _heldBody;
         private WorldItemNetworkSync _heldSync;
+        private CargoAttachment _heldCargo;
+
+        // Live placement plan for whatever is in hand. Recomputed every frame, because the
+        // hold point moves with the camera and the deck moves with the sea.
+        private PlacementZone _planZone;
+        private Vector3 _planPosition;
+        private Quaternion _planRotation;
+        private bool _planValid;
+
         private float _holdDistance;
         private float _origDrag, _origAngularDrag;
         private bool _origGravity;
@@ -91,6 +106,31 @@ namespace Game.Interaction
                     _holdDistance = Mathf.Clamp(_holdDistance + Mathf.Sign(scroll) * scrollSensitivity,
                         minHoldDistance, maxHoldDistance);
             }
+
+            UpdatePlacementPlan();
+        }
+
+        /// <summary>
+        /// Works out where the held cargo would land if let go, and shows it. Nothing here
+        /// touches the world - the plan is only acted on in <see cref="Release"/>, and the
+        /// server re-plans for itself, so being wrong costs an inaccurate preview and nothing
+        /// else.
+        /// </summary>
+        private void UpdatePlacementPlan()
+        {
+            _planZone = null;
+            _planValid = false;
+
+            if (_heldBody == null || _heldCargo == null) return;
+
+            Vector3 point = _heldBody.position;
+            var zone = PlacementZone.Find(point);
+            if (zone == null) return;
+
+            _planZone = zone;
+            _planValid = zone.Plan(_heldBody.gameObject, point,
+                _heldBody.transform.eulerAngles.y, out _planPosition, out _planRotation);
+            PlacementGhost.Show(_heldBody.gameObject, _planPosition, _planRotation, _planValid);
         }
 
         private void FixedUpdate()
@@ -125,7 +165,12 @@ namespace Game.Interaction
 
             _heldBody = rb;
             _heldSync = sync;
+            _heldCargo = rb.GetComponent<CargoAttachment>();
             _holdDistance = Mathf.Clamp(hit.distance, minHoldDistance, maxHoldDistance);
+
+            // Picking lashed cargo back up unlashes it. The body stays kinematic until the
+            // server agrees, and FixedUpdate already sits out that round trip.
+            if (_heldCargo != null && _heldCargo.IsAttached) _heldCargo.RequestDetach();
 
             _origDrag = rb.linearDamping;
             _origAngularDrag = rb.angularDamping;
@@ -149,12 +194,19 @@ namespace Game.Interaction
         {
             if (_heldBody != null)
             {
+                // Restored before anything branches: if the server refuses the attach below,
+                // the body carries on as a normal dynamic object rather than one still
+                // wearing the carry's zero gravity.
                 _heldBody.useGravity = _origGravity;
                 _heldBody.linearDamping = _origDrag;
                 _heldBody.angularDamping = _origAngularDrag;
                 _heldBody.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+
                 if (throwing)
                     _heldBody.AddForce(_camera.transform.forward * throwForce, ForceMode.VelocityChange);
+                else if (_planValid && _planZone != null && _heldCargo != null)
+                    _heldCargo.RequestAttach(_planZone, _planPosition, _planRotation);
+
                 _heldSync?.ReleaseOwnership();
             }
             ClearHeld();
@@ -164,6 +216,10 @@ namespace Game.Interaction
         {
             _heldBody = null;
             _heldSync = null;
+            _heldCargo = null;
+            _planZone = null;
+            _planValid = false;
+            PlacementGhost.Clear();
             if (_heavyApplied && _fpc != null) _fpc.SetSpeedMultiplier(1f);
             _heavyApplied = false;
         }
