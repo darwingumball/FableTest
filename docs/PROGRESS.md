@@ -407,6 +407,13 @@ MapCamera — prefabs cannot store scene references, so that link lives on the i
     error". The fix is `AssetDatabase.DeleteAsset` then rewrite and re-import — deleting the
     file from the shell does not clear the stale record.
 
+51. **Cutting an opening in a deck means cutting every solid box under it, not just the
+    plate.** The hold's hatch was carved out of the deck collider AND the deck plating and
+    still read as "blocked by red", because `HullBody` was one solid box spanning the whole
+    hull — you were looking down the hole at its top face in `TB_Hull` dark red. It is now
+    four slabs carved around the hold's outer shell (not its interior, so the hold's own
+    walls fill that 30 cm rather than z-fighting with hull sitting in the same space).
+
 
 ## Performance: measured, not assumed (2026-07-28)
 
@@ -657,9 +664,17 @@ volume. Toggling the whole surface is the right lever rather than a blunt one: t
 per-peer decision about one camera, and every peer has exactly one. It never turns the
 effect *on* for a surface that was authored without it.
 
-**The hold is built on the LEVEL root, walls included** — unlike the rest of the hull, which
-rolls. A deck you stand on can roll underneath you and still read correctly; a room you
-stand *inside* cannot, because at any real angle of heel its walls sweep through the camera.
+**The hold is split exactly the way the deck already is**: visuals on the rolling hull so it
+heels over with everything else, level colliders on the root for the floor you stand on
+(a CharacterController capsule is always world-upright and slides down a tilted collider).
+The exclusion mesh and the dry volume stay level too, and for the exclusion that is not just
+convenience — rolled with the hull, its top edge would tilt out of the water plane and dip
+under the surface on the low side, letting the sea render back into the room at exactly the
+moment the boat is working hardest.
+
+Note the ordering trap: `BuildBoat` strips primitive colliders from the whole hull *before*
+`BuildHold` runs, so the hold's visual boxes have to shed their own or the room ends up with
+a second, tilting set of walls inside the level ones.
 
 The boarding ladder moved forward to z=5.4. Its top exit lands inboard at x=−1.45, which
 used to be clear deck and is now the middle of the hatch — climbing aboard from the water

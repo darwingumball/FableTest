@@ -35,6 +35,7 @@ namespace Game.Editor
         private const float HOLD_CENTRE_Z = 2.4f;      // forward of the helm at z = -1.75
         private const float HOLD_WIDTH = 3f;
         private const float HOLD_LENGTH = 3.6f;
+        private const float HOLD_WALL = 0.3f;      // floor and bulkhead thickness
         // Exclusion reaches above the waterline so a crest cannot spill over its top edge.
         private const float HOLD_EXCLUSION_TOP_Y = -0.4f;
         private const string EXCLUSION_MATERIAL =
@@ -555,8 +556,28 @@ namespace Game.Editor
             // -2.6 and the hull has to reach past it, which puts 1.8 m of this boat under
             // water. That is a believable draft for a tug and it is what makes a walkway
             // below the waterline mean anything.
-            TestMaterials.Box("HullBody", hull, new Vector3(0f, -1.15f, 0f),
-                new Vector3(5.2f, 3.5f, 13f), hullPaint);
+            //
+            // Carved into four slabs around the hold's outer shell, because a solid box caps
+            // the hatch: looking down the opening you were seeing this thing's top face at
+            // y=0.6, which is why the hole read as blocked by red. The carve stops at the
+            // shell rather than the interior so the hold's own walls fill the gap instead of
+            // z-fighting with hull sitting in the same 30 cm.
+            const float holdShellHalfW = HOLD_WIDTH * 0.5f + HOLD_WALL;    // 1.8
+            const float holdShellHalfL = HOLD_LENGTH * 0.5f + HOLD_WALL;   // 2.1
+            const float hullCentreY = -1.15f, hullHeight = 3.5f;
+            float shellAftZ = HOLD_CENTRE_Z - holdShellHalfL;              // 0.3
+            float shellFwdZ = HOLD_CENTRE_Z + holdShellHalfL;              // 4.5
+
+            TestMaterials.Box("HullBody_Aft", hull,
+                new Vector3(0f, hullCentreY, (-6.5f + shellAftZ) * 0.5f),
+                new Vector3(5.2f, hullHeight, shellAftZ + 6.5f), hullPaint);
+            TestMaterials.Box("HullBody_Fwd", hull,
+                new Vector3(0f, hullCentreY, (shellFwdZ + 6.5f) * 0.5f),
+                new Vector3(5.2f, hullHeight, 6.5f - shellFwdZ), hullPaint);
+            for (int i = -1; i <= 1; i += 2)
+                TestMaterials.Box($"HullBody_Side_{i}", hull,
+                    new Vector3(i * (holdShellHalfW + 2.6f) * 0.5f, hullCentreY, HOLD_CENTRE_Z),
+                    new Vector3(2.6f - holdShellHalfW, hullHeight, holdShellHalfL * 2f), hullPaint);
             var bow = TestMaterials.Box("Bow", hull, new Vector3(0f, -0.4f, 7.1f),
                 new Vector3(3.4f, 2f, 2.6f), hullPaint);
             bow.transform.rotation = Quaternion.Euler(0f, 45f, 0f);
@@ -597,7 +618,7 @@ namespace Game.Editor
 
             var helm = BuildHelm(boat.transform, trim, deck);
             BuildLadder(boat.transform, trim);
-            BuildHold(boat.transform, hullPaint, deck, trim);
+            BuildHold(boat.transform, hull, hullPaint, deck, trim);
 
             // Wake. Both hang off the LEVEL root, so they stay square to the water while
             // the hull rolls - a decal is projected straight down, and letting it roll with
@@ -691,36 +712,61 @@ namespace Game.Editor
         ///
         /// The last two go through <see cref="DryHullVolume"/>.
         ///
-        /// Unlike the rest of the hull this is built on the LEVEL root rather than the
-        /// rolling visual, walls included. A deck you stand on can roll underneath you and
-        /// still read correctly, but a room you stand inside cannot: at any real angle of
-        /// heel its walls would sweep through the camera.
+        /// Split exactly the way the deck already is: the room's VISUALS hang off the rolling
+        /// hull so the hold heels over with everything else, while the surfaces you actually
+        /// stand on are level colliders on the root. A CharacterController capsule is always
+        /// world-upright and would slide down a tilted floor.
+        ///
+        /// The exclusion mesh and the dry volume stay level too, and for the exclusion that
+        /// is not just convenience: rolled with the hull, its top edge would tilt out of the
+        /// water plane and dip under the surface on the low side, letting the sea render
+        /// back into the room at exactly the moment the boat is working hardest.
         /// </summary>
-        private static void BuildHold(Transform boat, Material hullPaint, Material deck, Material trim)
+        private static void BuildHold(Transform boat, Transform hull, Material hullPaint,
+                                      Material deck, Material trim)
         {
-            var hold = TestMaterials.Node("Hold", boat, Vector3.zero);
-
-            // Floor is wider than the opening so the walls stand on it rather than beside it.
-            TestMaterials.Box("Floor", hold, new Vector3(0f, HOLD_FLOOR_Y - 0.15f, HOLD_CENTRE_Z),
-                new Vector3(HOLD_WIDTH + 0.6f, 0.3f, HOLD_LENGTH + 0.6f), deck);
+            var shell = TestMaterials.Node("Hold", hull, Vector3.zero);
 
             float wallHeight = HOLD_CEILING_Y - HOLD_FLOOR_Y;
             float wallCentreY = (HOLD_CEILING_Y + HOLD_FLOOR_Y) * 0.5f;
+            float outerWidth = HOLD_WIDTH + HOLD_WALL * 2f;
+            float outerLength = HOLD_LENGTH + HOLD_WALL * 2f;
+
+            // Floor is wider than the opening so the walls stand on it rather than beside it.
+            var parts = new System.Collections.Generic.List<(string, Vector3, Vector3, Material)>
+            {
+                ("Floor", new Vector3(0f, HOLD_FLOOR_Y - HOLD_WALL * 0.5f, HOLD_CENTRE_Z),
+                          new Vector3(outerWidth, HOLD_WALL, outerLength), deck),
+            };
             for (int i = -1; i <= 1; i += 2)
             {
-                TestMaterials.Box($"Wall_Side_{i}", hold,
-                    new Vector3(i * (HOLD_WIDTH * 0.5f + 0.15f), wallCentreY, HOLD_CENTRE_Z),
-                    new Vector3(0.3f, wallHeight, HOLD_LENGTH + 0.6f), hullPaint);
-                TestMaterials.Box($"Wall_End_{i}", hold,
-                    new Vector3(0f, wallCentreY, HOLD_CENTRE_Z + i * (HOLD_LENGTH * 0.5f + 0.15f)),
-                    new Vector3(HOLD_WIDTH, wallHeight, 0.3f), hullPaint);
+                parts.Add(($"Wall_Side_{i}",
+                    new Vector3(i * (HOLD_WIDTH + HOLD_WALL) * 0.5f, wallCentreY, HOLD_CENTRE_Z),
+                    new Vector3(HOLD_WALL, wallHeight, outerLength), hullPaint));
+                parts.Add(($"Wall_End_{i}",
+                    new Vector3(0f, wallCentreY, HOLD_CENTRE_Z + i * (HOLD_LENGTH + HOLD_WALL) * 0.5f),
+                    new Vector3(HOLD_WIDTH, wallHeight, HOLD_WALL), hullPaint));
             }
 
-            BuildHoldLadder(hold, trim);
+            foreach (var (name, centre, size, material) in parts)
+            {
+                var box = TestMaterials.Box(name, shell, centre, size, material);
+                // The blanket strip in BuildBoat has already run by now, so these have to
+                // shed their own primitive colliders - otherwise the room gets a second,
+                // tilting set of walls sitting inside the level ones.
+                foreach (var stray in box.GetComponentsInChildren<Collider>())
+                    Object.DestroyImmediate(stray);
 
-            // --- water exclusion + the dry-interior registration ---
-            var exclusion = new GameObject("WaterExclusion");
-            exclusion.transform.SetParent(hold, false);
+                var solid = boat.gameObject.AddComponent<BoxCollider>();
+                solid.center = centre;
+                solid.size = size;
+            }
+
+            BuildHoldLadder(boat, trim);
+
+            // --- water exclusion + the dry-interior registration, both on the LEVEL root ---
+            var exclusion = new GameObject("HoldWater");
+            exclusion.transform.SetParent(boat, false);
 
             var excluder = exclusion.AddComponent<WaterExcluder>();
 
@@ -731,9 +777,9 @@ namespace Game.Editor
             var meshGO = new GameObject("Water Excluder Renderer", typeof(MeshFilter), typeof(MeshRenderer));
             meshGO.transform.SetParent(exclusion.transform, false);
             meshGO.transform.localPosition = new Vector3(
-                0f, (HOLD_FLOOR_Y - 0.3f + HOLD_EXCLUSION_TOP_Y) * 0.5f, HOLD_CENTRE_Z);
+                0f, (HOLD_FLOOR_Y - HOLD_WALL + HOLD_EXCLUSION_TOP_Y) * 0.5f, HOLD_CENTRE_Z);
             meshGO.transform.localScale = new Vector3(
-                HOLD_WIDTH, HOLD_EXCLUSION_TOP_Y - (HOLD_FLOOR_Y - 0.3f), HOLD_LENGTH);
+                HOLD_WIDTH, HOLD_EXCLUSION_TOP_Y - (HOLD_FLOOR_Y - HOLD_WALL), HOLD_LENGTH);
 
             var cube = Resources.GetBuiltinResource<Mesh>("Cube.fbx");
             meshGO.GetComponent<MeshFilter>().sharedMesh = cube;
@@ -768,11 +814,14 @@ namespace Game.Editor
         /// <summary>
         /// Ladder down into the hold, on its aft bulkhead. Local +Z faces into the room, so
         /// the climber hangs inside it facing the rungs.
+        ///
+        /// On the LEVEL root for the same reason the boarding ladder is: the climb track and
+        /// its exit have to stay square to the deck being stepped out onto.
         /// </summary>
-        private static void BuildHoldLadder(Transform hold, Material trim)
+        private static void BuildHoldLadder(Transform boat, Material trim)
         {
             var ladderGO = new GameObject("HoldLadder");
-            ladderGO.transform.SetParent(hold, false);
+            ladderGO.transform.SetParent(boat, false);
             ladderGO.transform.localPosition =
                 new Vector3(0f, HOLD_FLOOR_Y, HOLD_CENTRE_Z - HOLD_LENGTH * 0.5f + 0.02f);
 
