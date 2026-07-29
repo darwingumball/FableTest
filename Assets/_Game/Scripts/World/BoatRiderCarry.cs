@@ -64,7 +64,7 @@ namespace Game.World
             Vector3 swung = Quaternion.AngleAxis(yawDelta, Vector3.up) * fromAxis;
             Vector3 rotationDelta = swung - fromAxis;
 
-            local.Controller.AddExternalMove(delta + rotationDelta);
+            local.Controller.ApplyCarry(delta + rotationDelta);
             if (Mathf.Abs(yawDelta) > 1e-4f) local.Controller.AddYaw(yawDelta);
         }
 

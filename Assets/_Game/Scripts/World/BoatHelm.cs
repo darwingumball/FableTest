@@ -43,10 +43,19 @@ namespace Game.World
         [SerializeField] private float maxSpeed = 9f;
         [Tooltip("Astern is deliberately far slower than ahead, like the real thing.")]
         [SerializeField] private float maxReverseSpeed = 3f;
-        [SerializeField] private float acceleration = 2.6f;
-        [Tooltip("Deceleration when the throttle is centred or released.")]
-        [SerializeField] private float dragDeceleration = 1.2f;
+        [Tooltip("Deliberately slow. A boat has no brakes and no grip - the whole character " +
+                 "of driving one is that it takes a long time to get moving and longer to " +
+                 "stop, so every manoeuvre has to be planned well before you need it.")]
+        [SerializeField] private float acceleration = 1.1f;
+        [Tooltip("Deceleration when the throttle is centred or released. Lower than the " +
+                 "acceleration: a hull loses way to drag alone, which is a slow business.")]
+        [SerializeField] private float dragDeceleration = 0.4f;
+        [Tooltip("Astern builds even more slowly than ahead.")]
+        [SerializeField] private float reverseAcceleration = 0.7f;
         [SerializeField] private float turnRateDegrees = 26f;
+        [Tooltip("How fast the rudder itself swings to the input. Instant rudder is the " +
+                 "other half of a boat feeling like a car.")]
+        [SerializeField] private float rudderRate = 1.6f;
         [Tooltip("Speed at which the rudder reaches full authority. A boat with no way on " +
                  "has no steering at all, which is the single thing that makes a boat feel " +
                  "like a boat rather than a car.")]
@@ -70,8 +79,9 @@ namespace Game.World
 
         private const ulong NoDriver = ulong.MaxValue;
 
-        // Server-side live input from the driver.
+        // Server-side live input from the driver, and the rudder angle easing toward it.
         private float _throttleInput, _rudderInput;
+        private float _rudder;
 
         // Local presentation state, eased toward _nav on every peer including the server.
         private Vector2 _position;
@@ -193,6 +203,7 @@ namespace Game.World
             // stale hard-over rudder cannot be inherited by the next person aboard.
             _throttleInput = 0f;
             _rudderInput = 0f;
+            _rudder = 0f;
         }
 
         [ServerRpc(RequireOwnership = false)]
@@ -225,16 +236,24 @@ namespace Game.World
 
             var nav = _nav.Value;
             float speed = nav.Speed;
-            // Coasting uses the (lower) drag rate, so letting go of the throttle reads as a
-            // hull losing way rather than as brakes.
-            float rate = Mathf.Abs(_throttleInput) > 0.01f ? acceleration : dragDeceleration;
+
+            // Three different rates, because they are three different physical things:
+            // driving the prop ahead, driving it astern, and simply losing way to drag.
+            // Coasting is much the slowest, which is what makes stopping something you have
+            // to plan for rather than something you do.
+            float rate = Mathf.Abs(_throttleInput) <= 0.01f ? dragDeceleration
+                       : target < speed - 0.01f && target < 0f ? reverseAcceleration
+                       : acceleration;
             speed = Mathf.MoveTowards(speed, target, rate * dt);
+
+            // The rudder swings toward the input rather than snapping to it.
+            _rudder = Mathf.MoveTowards(_rudder, _rudderInput, rudderRate * dt);
 
             // Rudder authority scales with way on, and reverses going astern - exactly like
             // backing a real boat, where the stern walks the way you did not expect.
             float authority = Mathf.Clamp01(Mathf.Abs(speed) / Mathf.Max(rudderAuthoritySpeed, 0.01f));
             float direction = speed >= 0f ? 1f : -1f;
-            _heading += _rudderInput * turnRateDegrees * authority * direction * dt;
+            _heading += _rudder * turnRateDegrees * authority * direction * dt;
 
             Vector3 fwd = Quaternion.Euler(0f, _heading, 0f) * Vector3.forward;
             _position += new Vector2(fwd.x, fwd.z) * (speed * dt);

@@ -6,8 +6,8 @@ namespace Game.World
     /// <summary>
     /// Carries the LOCAL player with a moving platform: while the player stands inside the
     /// cabin bounds, the platform's per-frame delta is fed into the CharacterController
-    /// through <see cref="Game.Player.FirstPersonController.AddExternalMove"/> (one Move
-    /// call, no fighting). Deltas larger than the teleport threshold (late-join snap,
+    /// through <see cref="Game.Player.FirstPersonController.ApplyCarry"/> (applied the same
+    /// frame, so the rider never trails the cabin). Deltas larger than the teleport threshold (late-join snap,
     /// schedule jump) are swallowed - the rebase fix the old metro lacked.
     /// </summary>
     [RequireComponent(typeof(PlatformMotionBase))]
@@ -40,7 +40,7 @@ namespace Game.World
                 && Mathf.Abs(offset.y) <= half.y
                 && Mathf.Abs(offset.z) <= half.z;
             if (inside)
-                local.Controller.AddExternalMove(delta);
+                local.Controller.ApplyCarry(delta);
         }
 
         private void OnDrawGizmosSelected()

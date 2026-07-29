@@ -296,6 +296,31 @@ MapCamera — prefabs cannot store scene references, so that link lives on the i
     every collider beneath it.** `BoatHelm` on the boat root offered "Take the helm" from
     anywhere on the hull. Put interactables on their own child with their own collider.
 
+35. **A queued carry delta always lands one frame late.** Platforms move *after* the player
+    has already moved (player in Update, platform in Update/LateUpdate), so
+    `AddExternalMove`-style deferral put every rider a frame behind. An elevator at 2 m/s
+    hides it; a boat at 9 m/s reads as the deck stuttering underfoot, and on a heaving deck
+    it lets the hull sweep through the capsule before the capsule is told to move. Apply the
+    delta immediately (`ApplyCarry`), with a hair of downward bias when grounded — a purely
+    horizontal `Move` can leave the controller reporting airborne on a deck it is plainly
+    standing on, which costs the rider their jump.
+
+36. **Moving colliders with no Rigidbody are STATIC colliders that teleport.** PhysX rebuilds
+    the static broadphase every frame and CharacterControllers get nothing solid to resolve
+    against — the "player morphs through the boat" symptom. Add a kinematic Rigidbody with
+    interpolation off (the transform is written outright each frame). Note the elevator and
+    metro still lack this; they are slow enough not to show it yet.
+
+37. **A hard clamp destroys the information in a tilt.** At full gain into a 16° clamp,
+    ordinary chop already pinned the limit, so a storm looked identical to a breeze.
+    Lower the gain and approach a *higher* ceiling asymptotically (`max * tanh(x / max)`):
+    gentle water stays gentle and a big sea still has somewhere to go.
+
+38. **The CPU water height query returns a staircase, not a curve.** It updates on a GPU
+    readback rather than per frame, so anything that follows it directly (a boat's heave)
+    inherits visible judder at speed. Damp heave harder than tilt — heave is what riders
+    stand on, roll is free because it only ever touches the visual hull.
+
 
 ## Performance: measured, not assumed (2026-07-28)
 

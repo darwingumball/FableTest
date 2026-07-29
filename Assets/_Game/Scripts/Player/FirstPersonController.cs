@@ -9,8 +9,7 @@ namespace Game.Player
     /// Only enabled on the owning client (<see cref="Game.Net.NetworkPlayer"/> gates it).
     ///
     /// External systems can push per-frame world-space displacement through
-    /// <see cref="AddExternalMove"/> (moving platforms use this so riders get carried
-    /// through the same CharacterController.Move call as their own walking).
+    /// <see cref="ApplyCarry"/> (moving platforms use this to carry their riders).
     /// </summary>
     [RequireComponent(typeof(CharacterController))]
     public class FirstPersonController : MonoBehaviour
@@ -85,7 +84,6 @@ namespace Game.Player
         private float _speedMultiplier = 1f;
         private float _externalSensitivityScale = 1f;
         private bool _invertY;
-        private Vector3 _externalMove;
         private bool _controlEnabled = true;
         private bool _lookEnabled = true;
         private bool _inWater;
@@ -244,7 +242,6 @@ namespace Game.Player
                 // themselves be moving on a boat. Nothing here may add gravity, walking or
                 // a carry delta on top of that. Checked before the swim branch so grabbing
                 // a ladder from the water actually gets you out of it.
-                _externalMove = Vector3.zero;
                 return;
             }
 
@@ -310,9 +307,7 @@ namespace Game.Player
                 _velocity.y = -2f;
             _velocity.y += gravity * Time.deltaTime;
 
-            Vector3 motion = _velocity * Time.deltaTime + _externalMove;
-            _externalMove = Vector3.zero;
-            _controller.Move(motion);
+            _controller.Move(_velocity * Time.deltaTime);
         }
 
         /// <summary>
@@ -339,13 +334,30 @@ namespace Game.Player
             }
             _velocity.y = vertical;
 
-            Vector3 motion = _velocity * Time.deltaTime + _externalMove;
-            _externalMove = Vector3.zero;
-            _controller.Move(motion);
+            _controller.Move(_velocity * Time.deltaTime);
         }
 
-        /// <summary>World-space displacement applied on the next Move (moving platform carry).</summary>
-        public void AddExternalMove(Vector3 worldDelta) => _externalMove += worldDelta;
+        /// <summary>
+        /// Carries the player with a moving surface, applied IMMEDIATELY.
+        ///
+        /// This used to queue the delta for the next Update, which put the rider a full
+        /// frame behind the platform: platforms move after the player has already moved, so
+        /// a queued delta always lands late. An elevator at 2 m/s hides that; a boat at
+        /// 9 m/s in a seaway does not - it reads as the deck stuttering underneath you, and
+        /// when the deck is also heaving it lets the hull sweep through the capsule before
+        /// the capsule is told to move.
+        /// </summary>
+        public void ApplyCarry(Vector3 worldDelta)
+        {
+            if (worldDelta == Vector3.zero || _climbing) return;
+
+            // A purely horizontal Move can leave the controller reporting airborne on a
+            // deck it is plainly standing on, which costs the rider their jump and starts
+            // gravity ramping. A hair of downward bias keeps the contact alive; the
+            // controller stops at the deck, so it does not accumulate.
+            bool grounded = _controller.isGrounded;
+            _controller.Move(grounded ? worldDelta + Vector3.down * 0.02f : worldDelta);
+        }
 
         /// <summary>Disables movement input (dialogs, menus). Look is controlled separately.</summary>
         public void SetMoveControl(bool enabled) => _controlEnabled = enabled;

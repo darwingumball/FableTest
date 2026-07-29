@@ -359,6 +359,17 @@ namespace Game.Editor
             // all; a hull steered by a human has to have an owner, and that is the server.
             boat.AddComponent<NetworkObject>();
 
+            // Without a Rigidbody, PhysX treats these colliders as STATIC geometry that
+            // happens to teleport every frame: it rebuilds the static broadphase constantly
+            // and gives the riders' CharacterControllers nothing to collide against
+            // properly, which is how a heaving deck ends up passing through people. A
+            // kinematic body makes the boat a legitimate moving collider. Interpolation is
+            // off because BoatMotion writes the transform outright each frame.
+            var body = boat.AddComponent<Rigidbody>();
+            body.isKinematic = true;
+            body.useGravity = false;
+            body.interpolation = RigidbodyInterpolation.None;
+
             // --- collision deck: stays level, this is what the player walks on ---
             var deckCollider = boat.AddComponent<BoxCollider>();
             // Top face flush with the visual deck plate at y=0.80, so standing on the level
@@ -428,12 +439,19 @@ namespace Game.Editor
             so.FindProperty("hullLength").floatValue = 6.5f;
             so.FindProperty("hullBeam").floatValue = 2.6f;
             so.FindProperty("freeboard").floatValue = 1.1f;
-            // Tilt is visual only - the collision deck stays level - so exaggerating it
-            // costs nothing in playability and is what sells "rough water". Measured roll
-            // on this swell is 2-4 degrees at 1.0, which reads as a working boat in chop
-            // rather than a barge on a millpond.
-            so.FindProperty("waveFollow").floatValue = 1f;
-            so.FindProperty("maxTiltDegrees").floatValue = 16f;
+            // Lower gain against a much higher ceiling, approached asymptotically. At 1.0
+            // into a hard 16-degree clamp, ordinary chop already pinned the limit, so a
+            // storm looked identical to a breeze - the tilt carried no information. At 0.7
+            // into a soft 24, everyday water leans noticeably less and a genuinely big sea
+            // still has somewhere to go.
+            so.FindProperty("waveFollow").floatValue = 0.7f;
+            so.FindProperty("maxTiltDegrees").floatValue = 24f;
+            // Heave is the part the riders actually stand on. The CPU water query updates
+            // on a GPU readback rather than per frame, so its height comes back as a
+            // staircase; damping it hard is what stops that becoming visible judder
+            // underfoot at speed.
+            so.FindProperty("heaveFollow").floatValue = 0.7f;
+            so.FindProperty("heaveSmoothing").floatValue = 1.8f;
             so.ApplyModifiedPropertiesWithoutUndo();
 
             var carry = boat.AddComponent<BoatRiderCarry>();

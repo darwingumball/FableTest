@@ -46,14 +46,23 @@ namespace Game.World
         [SerializeField] private float hullBeam = 2.4f;
         [Tooltip("Metres the deck rides above the water it displaces.")]
         [SerializeField] private float freeboard = 0.9f;
-        [Tooltip("0 = ignore the waves, 1 = follow them exactly. Below 1 reads as a heavy " +
-                 "hull with real inertia instead of a leaf on the surface.")]
-        [SerializeField, Range(0f, 1f)] private float waveFollow = 0.75f;
-        [Tooltip("Smoothing on heave and tilt. A hull this size does not snap.")]
+        [Tooltip("Tilt gain. 0 = ignore the waves, 1 = lie exactly along the surface slope. " +
+                 "Below 1 reads as a heavy hull with real inertia instead of a leaf.")]
+        [SerializeField, Range(0f, 1f)] private float waveFollow = 0.7f;
+        [Tooltip("How much of the wave height the deck actually rides. The deck is what the " +
+                 "player stands on, and tracking every crest exactly throws them around; a " +
+                 "heavy hull punches through the top of a wave rather than topping it.")]
+        [SerializeField, Range(0f, 1f)] private float heaveFollow = 0.7f;
+        [Tooltip("Smoothing on tilt. A hull this size does not snap.")]
         [SerializeField] private float smoothing = 2.5f;
-        [Tooltip("Hard cap on tilt. The visual can exaggerate, but past this it reads as " +
-                 "capsizing rather than rough water.")]
-        [SerializeField] private float maxTiltDegrees = 14f;
+        [Tooltip("Heave is smoothed harder than tilt: vertical deck movement is the part " +
+                 "that fights the riders' CharacterControllers, and roll is free because it " +
+                 "only ever touches the visual hull.")]
+        [SerializeField] private float heaveSmoothing = 1.8f;
+        [Tooltip("Tilt ceiling. Approached asymptotically rather than clipped, so ordinary " +
+                 "chop stays gentle while a genuine storm sea can lean the hull right over " +
+                 "without the response ever flattening off at a hard limit.")]
+        [SerializeField] private float maxTiltDegrees = 24f;
 
         /// <summary>World-space movement applied this frame. Read by <see cref="BoatRiderCarry"/>.</summary>
         public Vector3 LastFrameDelta { get; private set; }
@@ -114,14 +123,16 @@ namespace Game.World
                 float port = water.SampleHeight(target - right * hullBeam);
                 float starboard = water.SampleHeight(target + right * hullBeam);
 
-                heaveTarget = (bow + stern + port + starboard) * 0.25f + freeboard;
+                float meanSurface = (bow + stern + port + starboard) * 0.25f;
+                heaveTarget = water.BaseLevel + (meanSurface - water.BaseLevel) * heaveFollow
+                              + freeboard;
 
                 // Tilt is the slope across the hull: rise over run, in degrees.
                 pitchTarget = -Mathf.Atan2((bow - stern) * waveFollow, hullLength * 2f) * Mathf.Rad2Deg;
                 rollTarget = Mathf.Atan2((starboard - port) * waveFollow, hullBeam * 2f) * Mathf.Rad2Deg;
 
-                pitchTarget = Mathf.Clamp(pitchTarget, -maxTiltDegrees, maxTiltDegrees);
-                rollTarget = Mathf.Clamp(rollTarget, -maxTiltDegrees, maxTiltDegrees);
+                pitchTarget = SoftLimit(pitchTarget);
+                rollTarget = SoftLimit(rollTarget);
             }
 
             if (!_initialised)
@@ -136,7 +147,8 @@ namespace Game.World
             else
             {
                 float k = 1f - Mathf.Exp(-smoothing * Time.deltaTime);
-                _heave = Mathf.Lerp(_heave, heaveTarget, k);
+                _heave = Mathf.Lerp(_heave, heaveTarget,
+                                    1f - Mathf.Exp(-heaveSmoothing * Time.deltaTime));
                 _pitch = Mathf.Lerp(_pitch, pitchTarget, k);
                 _roll = Mathf.Lerp(_roll, rollTarget, k);
             }
@@ -151,6 +163,17 @@ namespace Game.World
             LastFrameDelta = transform.position - previousPosition;
             LastFrameYawDelta = Mathf.DeltaAngle(previousYaw, transform.eulerAngles.y);
         }
+
+        /// <summary>
+        /// Saturating limiter: identity for small angles, asymptotic to the ceiling.
+        ///
+        /// A hard clamp made the tilt useless as a sea state read - ordinary chop already
+        /// pinned it at the limit, so a storm looked exactly like a breeze. tanh leaves
+        /// gentle water gentle and lets a genuinely big sea keep leaning the hull further,
+        /// without ever reaching a value that would read as capsizing.
+        /// </summary>
+        private float SoftLimit(float degrees) =>
+            maxTiltDegrees * (float)System.Math.Tanh(degrees / maxTiltDegrees);
 
         private static double CurrentTime()
         {
