@@ -52,6 +52,18 @@ namespace Game.Admin
         public void Submit(string line)
         {
             if (string.IsNullOrWhiteSpace(line)) return;
+
+            // perf is the one command that must NOT go to the server. Frame time is a
+            // property of the machine looking at the scene, and its toggles affect only the
+            // local renderer - running it on the host would measure the wrong computer and
+            // change everyone's picture to answer one person's question.
+            var args = line.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (args.Length > 0 && args[0].ToLowerInvariant() == "perf")
+            {
+                OnReply?.Invoke(PerfProbe.Execute(args));
+                return;
+            }
+
             if (IsServer) Execute(line, NetworkManager.ServerClientId);
             else SubmitServerRpc(new FixedString512Bytes(line));
         }
@@ -252,14 +264,17 @@ namespace Game.Admin
                 case "goto":
                 {
                     if (args.Length < 2)
-                        return "usage: goto <storefront|warehouse|street|apartment|spawn>";
+                        return "usage: goto <storefront|warehouse|street|shore|sea|spawn>";
                     Vector3 target;
                     switch (args[1].ToLowerInvariant())
                     {
                         case "storefront": target = new Vector3(-26f, 1f, 28f); break;
                         case "warehouse": target = new Vector3(26f, 1f, -10f); break;
                         case "street": target = new Vector3(0f, 1f, -35f); break;
-                        case "apartment": target = new Vector3(0f, 1f, 44f); break;
+                        // Fixed vantage points for repeatable perf comparisons: standing on
+                        // the beach, and well out on the water looking back at the land.
+                        case "shore": target = new Vector3(0f, 1f, 60f); break;
+                        case "sea": target = new Vector3(0f, -2f, 250f); break;
                         case "spawn": target = new Vector3(0f, 1f, 0f); break;
                         default: return $"Unknown location '{args[1]}'.";
                     }
@@ -386,8 +401,12 @@ namespace Game.Admin
             "  res <height|native>                    PSX internal res: 240/360/480/native\n" +
             "  light <group|all> <multiplier>         scale a light group live\n" +
             "  light list                             groups, counts, current scale\n" +
+            "Performance (local only - measures YOUR machine, changes only YOUR picture):\n" +
+            "  perf                                   frame ms, draws, tris, live lights\n" +
+            "  perf <lights|shadows|fog|post|sky|water|snow> on|off\n" +
+            "  perf reset                             put everything back\n" +
             "Player:\n" +
-            "  goto <storefront|warehouse|street|apartment|spawn>\n" +
+            "  goto <storefront|warehouse|street|shore|sea|spawn>\n" +
             "  tp <x> <y> <z>\n" +
             "  speed <multiplier>                     1 = normal\n" +
             "  heal\n" +
