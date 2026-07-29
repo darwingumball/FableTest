@@ -36,9 +36,16 @@ namespace Game.Editor
         private const float HOLD_WIDTH = 3f;
         private const float HOLD_LENGTH = 3.6f;
         private const float HOLD_WALL = 0.3f;      // floor and bulkhead thickness
-        // Exclusion reaches above the waterline so a crest cannot spill over its top edge.
-        private const float HOLD_EXCLUSION_TOP_Y = -0.4f;
+        // The two exclusion boxes want OPPOSITE sizes - see BuildHold.
+        // Outward: hugs the room so the hatch is fully covered seen from the deck. The 2 cm
+        // is only to avoid being coplanar with the bulkheads.
         private const float HOLD_EXCLUSION_INSET = 0.02f;
+        // Inward: must fit inside the room's AIR, clear of anything protruding into it. The
+        // ladder reaches ~13 cm off the aft bulkhead, so 20 cm clears it with margin.
+        private const float HOLD_INTERIOR_INSET = 0.2f;
+        // ...and start just above the floor plating rather than below it, or looking down at
+        // the deck the box's own bottom face lands behind the floor and stops tagging.
+        private const float HOLD_INTERIOR_FLOOR_CLEARANCE = 0.05f;
         private const string EXCLUSION_MATERIAL =
             "Packages/com.unity.render-pipelines.high-definition/Runtime/" +
             "RenderPipelineResources/Material/MaterialWaterExclusion.mat";
@@ -782,30 +789,45 @@ namespace Game.Editor
             // the open sea alongside the boat as well. Its top is a little above the
             // waterline so a passing crest cannot spill over the edge of the exclusion.
             //
-            // Inset a couple of centimetres from the bulkheads. At the interior dimensions
-            // exactly, the box's side faces are COPLANAR with the walls, and exclusion is
-            // drawn ZTest LEqual against the opaque buffer - so whether a pixel gets tagged
-            // comes down to float rounding and the water tears in and out along the walls.
-            // Shrinking loses nothing: seen from inside, a smaller concentric box subtends a
-            // LARGER solid angle, so it still covers everything.
-            var boxCentre = new Vector3(
-                0f, (HOLD_FLOOR_Y - HOLD_WALL + HOLD_EXCLUSION_TOP_Y) * 0.5f, HOLD_CENTRE_Z);
-            var boxSize = new Vector3(
-                HOLD_WIDTH - HOLD_EXCLUSION_INSET * 2f,
-                HOLD_EXCLUSION_TOP_Y - (HOLD_FLOOR_Y - HOLD_WALL),
-                HOLD_LENGTH - HOLD_EXCLUSION_INSET * 2f);
-
             // TWO meshes, one facing each way, because HDRP's exclusion shader is Cull Back.
             // A single box only tags pixels when it is viewed from OUTSIDE - which covers
             // looking down the hatch from the deck and nothing else. Stand IN the room and
             // every face of that box is back-facing, so nothing is written and the sea
-            // renders straight through the hold at eye level. The inward-facing copy is what
-            // makes the room dry from the inside. They never conflict: whichever way the
-            // camera is, exactly one of them survives culling.
+            // renders straight through the hold at eye level. They never conflict: whichever
+            // way the camera is, exactly one of them survives culling.
+            //
+            // What is NOT obvious is that the two want opposite sizes, because a stencil tag
+            // only lands where its fragment is nearer than the opaque surface behind it:
+            //
+            //   OUTWARD, seen from the deck, presents its TOP face - already in front of
+            //   everything in the room - so it should hug the opening and cover all of it.
+            //
+            //   INWARD, seen from inside, presents its FAR faces. Anything sticking into the
+            //   room sits in front of those and defeats them. That is the water that was
+            //   still showing at the ladder: the box's aft face was 6 cm BEHIND the rungs, so
+            //   every pixel of ladder went untagged and the sea drew over it. So the inward
+            //   box has to fit inside the room's AIR, clear of the fittings - and shrinking
+            //   costs nothing, because from inside a smaller concentric box subtends a LARGER
+            //   solid angle and still fills the view.
+            float roomCentreY = (HOLD_FLOOR_Y + HOLD_CEILING_Y) * 0.5f;
+            float roomHeight = HOLD_CEILING_Y - HOLD_FLOOR_Y;
+
             var outward = AddExclusionMesh(exclusion.transform, "Water Excluder Renderer",
-                Resources.GetBuiltinResource<Mesh>("Cube.fbx"), boxCentre, boxSize, exclusionMaterial);
+                Resources.GetBuiltinResource<Mesh>("Cube.fbx"),
+                new Vector3(0f, roomCentreY, HOLD_CENTRE_Z),
+                new Vector3(HOLD_WIDTH - HOLD_EXCLUSION_INSET * 2f, roomHeight,
+                            HOLD_LENGTH - HOLD_EXCLUSION_INSET * 2f),
+                exclusionMaterial);
+
+            // Top stays at the deck underside so a jumping player cannot rise out through it
+            // - that was one flicker of open water per jump, at the top of the arc.
+            float innerFloor = HOLD_FLOOR_Y + HOLD_INTERIOR_FLOOR_CLEARANCE;
             AddExclusionMesh(exclusion.transform, "Water Excluder Renderer (Interior)",
-                InvertedCubeMesh(), boxCentre, boxSize, exclusionMaterial);
+                InvertedCubeMesh(),
+                new Vector3(0f, (innerFloor + HOLD_CEILING_Y) * 0.5f, HOLD_CENTRE_Z),
+                new Vector3(HOLD_WIDTH - HOLD_INTERIOR_INSET * 2f, HOLD_CEILING_Y - innerFloor,
+                            HOLD_LENGTH - HOLD_INTERIOR_INSET * 2f),
+                exclusionMaterial);
 
             // WaterExcluder keeps both of its fields internal, so they can only be written
             // through the serialized object. Neither is read at runtime - the exclusion pass
@@ -817,14 +839,19 @@ namespace Game.Editor
                 Resources.GetBuiltinResource<Mesh>("Cube.fbx");
             eso.ApplyModifiedPropertiesWithoutUndo();
 
+            // The dry volume wants the OPPOSITE treatment to the inward exclusion box: run it
+            // out through the plating rather than inset from it. Nobody can stand inside a
+            // solid bulkhead, so the extra space cannot make anyone wrongly dry - it is free
+            // margin that stops the fog and the swim state flickering when a player presses
+            // against a wall or jumps. Floor plating to the top of the deck.
+            float dryFloor = HOLD_FLOOR_Y - HOLD_WALL;
+            float dryCeiling = HOLD_CEILING_Y + 0.16f;   // through the deck plate
             var dry = exclusion.AddComponent<DryHullVolume>();
             var dso = new SerializedObject(dry);
-            // Floor to deck underside: no gap on the way up the ladder where the underwater
-            // fog could flick back on for a frame.
             dso.FindProperty("center").vector3Value = new Vector3(
-                0f, (HOLD_FLOOR_Y + HOLD_CEILING_Y) * 0.5f, HOLD_CENTRE_Z);
+                0f, (dryFloor + dryCeiling) * 0.5f, HOLD_CENTRE_Z);
             dso.FindProperty("size").vector3Value = new Vector3(
-                HOLD_WIDTH, HOLD_CEILING_Y - HOLD_FLOOR_Y, HOLD_LENGTH);
+                HOLD_WIDTH + HOLD_WALL * 2f, dryCeiling - dryFloor, HOLD_LENGTH + HOLD_WALL * 2f);
             dso.ApplyModifiedPropertiesWithoutUndo();
         }
 

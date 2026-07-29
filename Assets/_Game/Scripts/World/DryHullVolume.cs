@@ -29,8 +29,12 @@ namespace Game.World
     /// </summary>
     public class DryHullVolume : MonoBehaviour
     {
-        [Tooltip("Interior air space, boat-local. Should match the inside of the exclusion " +
-                 "mesh, not the outside of the hull.")]
+        [Tooltip("Boat-local. Run this OUT through the plating rather than stopping at the " +
+                 "inside face: nobody can stand inside a solid bulkhead, so the extra space " +
+                 "cannot make anyone wrongly dry, and it is free margin against the fog and " +
+                 "the swim state flickering when a player presses against a wall or jumps. " +
+                 "Note this is the opposite of what the water exclusion MESH wants, which " +
+                 "has to stay inside the air to keep working.")]
         [SerializeField] private Vector3 center = Vector3.zero;
         [SerializeField] private Vector3 size = new(3f, 2.4f, 4f);
 

@@ -414,6 +414,24 @@ MapCamera — prefabs cannot store scene references, so that link lives on the i
     inside, a smaller concentric box subtends a *larger* solid angle, so it still covers
     everything.
 
+54. **The two exclusion boxes want OPPOSITE sizes, and the dry volume wants the opposite
+    again.** A stencil tag only lands where its fragment is nearer than the opaque surface
+    behind it, and the two meshes present different faces:
+    - **Outward** (seen from the deck) presents its TOP face, already in front of everything
+      in the room, so it should hug the opening and cover all of it.
+    - **Inward** (seen from inside) presents its FAR faces, so *anything protruding into the
+      room sits in front of them and defeats them*. Water kept showing at the hold ladder
+      for exactly this reason — the box's aft face was 6 cm behind the rungs, so every pixel
+      of ladder went untagged. The inward box must fit inside the room's AIR, clear of the
+      fittings, and must reach high enough that a jumping player cannot rise out through the
+      top (that was one flicker of open water per jump, at the apex).
+    - **`DryHullVolume`** should run OUT through the plating instead. Nobody can stand inside
+      a solid bulkhead, so the extra space cannot make anyone wrongly dry; it is free margin
+      against the fog and swim state flickering at a wall or at the top of a jump.
+
+    Rule of thumb for the boats to come: exclusion mesh inside the air, dry volume through
+    the steel.
+
 50. **A file written externally can land in Unity's asset database but NOT in the compile
     set.** `AssetDatabase.FindAssets` found it, the importer was `MonoImporter`, and
     `GetAssemblyNameFromScriptPath` returned the right assembly — while
