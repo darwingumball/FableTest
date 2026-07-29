@@ -28,7 +28,13 @@ namespace Game.Editor
         private const string WORLD_SCENE = "Assets/_Game/Scenes/World.unity";
         private const string TEX_FOLDER = "Assets/_Game/Textures";
         private const string STARS_PATH = TEX_FOLDER + "/StarField.asset";
-        private const string MOON_PATH = TEX_FOLDER + "/MoonSurface.asset";
+        // A PNG, not a .asset. The moon's surface texture is consumed as a LIGHT COOKIE
+        // (PhysicallyBasedSkyRenderer routes surfaceTexture through
+        // lightCookieManager.Fetch2DCookie), and the cookie atlas cannot ingest a
+        // code-generated Texture2D saved as a native asset - it returns a zero scale/offset
+        // and the disc samples nothing, rendering pure black. Writing a real PNG gives it a
+        // TextureImporter, which is what the atlas expects.
+        private const string MOON_PATH = TEX_FOLDER + "/MoonSurface.png";
         private const string MOON_NAME = "Moon";
         private const string MOON_DISC_NAME = "MoonDisc";
 
@@ -37,8 +43,25 @@ namespace Game.Editor
         // roughly 17x life size, which is what makes the moon read as a body in the sky
         // rather than a bright star.
         private const float MOON_ANGULAR_DIAMETER = 9f;
-        /// <summary>Target disc radiance in cd/m^2, just under the night exposure ceiling.</summary>
-        private const float MOON_DISC_RADIANCE = 515f;
+        /// <summary>
+        /// Disc brightness constant, CALIBRATED not derived.
+        ///
+        /// HDRP computes disc radiance as EvaluateLightColor() / solid angle, which suggests
+        /// ~515 would land just under the EV100 9 night ceiling. Measured, that rendered at
+        /// 0.074 of full - about 11x too dark - because the naive figure ignores the surface
+        /// texture's own albedo (~0.78 sRGB, ~0.56 linear) and the atmospheric transmittance
+        /// the disc is attenuated by on the way down, the same effect that reddens the stars.
+        /// This value is back-solved from that measurement to land near 0.8.
+        ///
+        /// Still divided by solid angle below, so changing MOON_ANGULAR_DIAMETER keeps the
+        /// brightness put instead of silently darkening the moon.
+        /// </summary>
+        /// Two measured points (9.98 lux -> 0.074, 107.9 lux -> 0.376) give peak ~ I^0.68,
+        /// not the linear response the formula implies - a tonemapper is compressing the
+        /// top end. Intensity therefore has diminishing returns, and the disc's INTERIOR
+        /// brightness is governed mostly by the surface texture's albedo (see
+        /// BuildMoonTexture, which is deliberately near-white for this reason).
+        private const float MOON_DISC_RADIANCE = 9000f;
 
         /// <summary>Intensity that produces <see cref="MOON_DISC_RADIANCE"/> at the current size.</summary>
         private static float MoonDiscLux()
@@ -214,10 +237,15 @@ namespace Game.Editor
                 for (int x = 0; x < size; x++)
                 {
                     var p = new Vector2((x + 0.5f) / size, (y + 0.5f) / size);
-                    float shade = 0.78f;
+                    // Near-white base. The real moon is about 0.12 albedo - dark rock - but
+                    // this texture is not lit, it IS the disc's brightness. A realistic
+                    // albedo here renders as a grey smudge inside a bright rim, because the
+                    // sky's tonemapping compresses the highlights the texture is competing
+                    // with. Bright base, gentle features.
+                    float shade = 0.95f;
 
                     foreach (var (centre, radius) in maria)
-                        shade -= 0.16f * (1f - Mathf.SmoothStep(radius * 0.5f, radius, Vector2.Distance(p, centre)));
+                        shade -= 0.10f * (1f - Mathf.SmoothStep(radius * 0.5f, radius, Vector2.Distance(p, centre)));
 
                     foreach (var (centre, radius) in craters)
                     {
@@ -226,10 +254,10 @@ namespace Game.Editor
                         // Bright rim, dark floor - the thing that actually makes a circle
                         // read as a crater rather than a stain.
                         float k = d / radius;
-                        shade += k > 0.78f ? 0.13f : -0.14f * (1f - k);
+                        shade += k > 0.78f ? 0.05f : -0.11f * (1f - k);
                     }
 
-                    shade += ((float)rng.NextDouble() - 0.5f) * 0.03f;
+                    shade += ((float)rng.NextDouble() - 0.5f) * 0.02f;
                     shade = Mathf.Clamp01(shade);
                     byte b = (byte)(shade * 255f);
                     pixels[y * size + x] = new Color32(b, b, (byte)(shade * 250f), 255);
@@ -238,10 +266,25 @@ namespace Game.Editor
             tex.SetPixels32(pixels);
             tex.Apply();
 
-            var existing = AssetDatabase.LoadAssetAtPath<Texture2D>(MOON_PATH);
-            if (existing != null) AssetDatabase.DeleteAsset(MOON_PATH);
-            AssetDatabase.CreateAsset(tex, MOON_PATH);
-            return tex;
+            File.WriteAllBytes(MOON_PATH, tex.EncodeToPNG());
+            Object.DestroyImmediate(tex);
+            AssetDatabase.ImportAsset(MOON_PATH, ImportAssetOptions.ForceUpdate);
+
+            // The cookie atlas wants an uncompressed, non-streaming, readable texture.
+            // Leaving it on the project's default (usually DXT + streaming) is another way
+            // to end up with a black disc.
+            if (AssetImporter.GetAtPath(MOON_PATH) is TextureImporter importer)
+            {
+                importer.textureType = TextureImporterType.Default;
+                importer.sRGBTexture = true;
+                importer.mipmapEnabled = true;
+                importer.wrapMode = TextureWrapMode.Clamp;
+                importer.streamingMipmaps = false;
+                importer.textureCompression = TextureImporterCompression.Uncompressed;
+                importer.SaveAndReimport();
+            }
+
+            return AssetDatabase.LoadAssetAtPath<Texture2D>(MOON_PATH);
         }
 
         // --- scene wiring ---------------------------------------------------------------
@@ -403,6 +446,15 @@ namespace Game.Editor
             // throws, so the names below are read off the live SerializedObject, not guessed.
             var so = new SerializedObject(discHd);
             so.FindProperty("m_InteractsWithSky").boolValue = true;
+            // The disc needs ~110 lux to render at the right brightness, which is a quarter
+            // of the moonlight itself - far too much to let leak into the scene. The sky
+            // reads EvaluateLightColor() (colour x intensity) and does NOT apply the light
+            // dimmer, while the lighting path does. Zeroing the dimmer therefore keeps the
+            // disc bright while contributing nothing to what the world is lit by, which is
+            // the whole point of splitting the moon into two lights.
+            so.FindProperty("m_LightDimmer").floatValue = 0f;
+            so.FindProperty("m_AffectDiffuse").boolValue = false;
+            so.FindProperty("m_AffectSpecular").boolValue = false;
             // Real angular diameter is 0.52 degrees, which at this field of view is a
             // fleck. Oversizing is the standard game cheat and is what makes a night sky
             // feel composed rather than empty.
