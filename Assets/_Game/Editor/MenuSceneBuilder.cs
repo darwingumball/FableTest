@@ -27,6 +27,7 @@ namespace Game.Editor
         private const string MAINMENU_SCENE = "Assets/_Game/Scenes/MainMenu.unity";
         private const string ROOT_NAME = "MenuHarbour";
         private const string CAMERA_NAME = "MenuCamera";
+        private const string PROFILE_PATH = "Assets/_Game/UI/MenuHarbourProfile.asset";
 
         // Composition: camera left of the action, looking right and slightly down. The pier
         // and the boat live at positive X so they fall in the right two thirds of frame,
@@ -34,6 +35,21 @@ namespace Game.Editor
         private static readonly Vector3 CameraPosition = new(-4f, 4.6f, -15f);
         private static readonly Vector3 CameraLookAt = new(11f, 0.6f, 8f);
         private const float PIER_X = 15f;
+
+        // ---- tuning knobs ----------------------------------------------------------
+        // All the brightness lives here. Note these are NOT physical values: they are what
+        // reads correctly at NIGHT_EXPOSURE, which is the world scene's night setting and
+        // the value the shared star field is already tuned against. Real moonlight (~0.5
+        // lux) at EV 9 is nine stops below mid grey, i.e. black.
+        private const float NIGHT_EXPOSURE = 9f;      // EV100; HIGHER is darker
+        private const float MOON_LUX = 1000f;         // fill on the geometry
+        private const float SKY_LUX = 55f;            // horizon glow and sky brightness
+        private const float PIER_LAMP_LUMENS = 5000f;
+        private const float BOAT_LAMP_LUMENS = 6000f;
+        private const float WINDOW_LUMENS = 2600f;
+        private const float FOG_MEAN_FREE_PATH = 45f; // metres of visibility; LOWER is thicker
+        private const float FOG_TOP_HEIGHT = 14f;     // fog pools below this, over the water
+        private const float STAR_BRIGHTNESS = 260f;
         private static readonly Vector3 BoatMooring = new(9.4f, 0f, 6f);
 
         [MenuItem("Game/Setup/Build Menu Scene")]
@@ -126,8 +142,13 @@ namespace Game.Editor
             skyLight.color = new Color(0.55f, 0.62f, 0.85f);
             skyLight.shadows = LightShadows.None;
 
-            var skyData = skyGO.AddComponent<HDAdditionalLightData>();
-            skyData.SetIntensity(0.02f, LightUnit.Lux);
+            var skyData = skyGO.GetComponent<HDAdditionalLightData>() ?? skyGO.AddComponent<HDAdditionalLightData>();
+            // Lux here is not physical moonlight - it is whatever reads correctly at the
+            // world scene's night exposure of EV 9, which is the convention the star field
+            // multiplier and every practical in this project are already tuned against.
+            // True moonlight (~0.5 lux) at EV 9 is nine stops below mid grey: black.
+            skyData.lightUnit = LightUnit.Lux;
+            skyData.intensity = SKY_LUX;
             skyData.EnableColorTemperature(false);
             skyData.interactsWithSky = true;
 
@@ -140,10 +161,12 @@ namespace Game.Editor
             moon.color = new Color(0.66f, 0.75f, 1f);
             moon.shadows = LightShadows.Soft;
 
-            var moonData = moonGO.AddComponent<HDAdditionalLightData>();
-            moonData.SetIntensity(0.5f, LightUnit.Lux);
+            var moonData = moonGO.GetComponent<HDAdditionalLightData>() ?? moonGO.AddComponent<HDAdditionalLightData>();
+            moonData.lightUnit = LightUnit.Lux;
+            moonData.intensity = MOON_LUX;
             moonData.EnableColorTemperature(false);
             moonData.interactsWithSky = false;
+            moonData.affectsVolumetric = true;
             moonData.volumetricDimmer = 1.3f;
 
             var volumeGO = new GameObject("MenuVolume");
@@ -152,15 +175,19 @@ namespace Game.Editor
             volume.isGlobal = true;
             volume.priority = 100f;   // above anything the Boot scene carries over
 
+            // Created on disk BEFORE the overrides are added, because each override is its
+            // own ScriptableObject and has to be parented into this asset (see the loop at
+            // the end of this method).
+            AssetDatabase.DeleteAsset(PROFILE_PATH);
             var profile = ScriptableObject.CreateInstance<VolumeProfile>();
             profile.name = "MenuHarbourProfile";
-            volume.sharedProfile = profile;
+            AssetDatabase.CreateAsset(profile, PROFILE_PATH);
 
             var exposure = profile.Add<Exposure>(overrides: false);
             exposure.mode.overrideState = true;
             exposure.mode.value = ExposureMode.Fixed;
             exposure.fixedExposure.overrideState = true;
-            exposure.fixedExposure.value = 9f;      // matches the world's night value
+            exposure.fixedExposure.value = NIGHT_EXPOSURE;
 
             var sky = profile.Add<PhysicallyBasedSky>(overrides: false);
             sky.groundTint.overrideState = true;
@@ -173,7 +200,7 @@ namespace Game.Editor
                 sky.spaceEmissionTexture.overrideState = true;
                 sky.spaceEmissionTexture.value = stars;
                 sky.spaceEmissionMultiplier.overrideState = true;
-                sky.spaceEmissionMultiplier.value = 260f;
+                sky.spaceEmissionMultiplier.value = STAR_BRIGHTNESS;
             }
 
             var visualEnv = profile.Add<VisualEnvironment>(overrides: false);
@@ -184,7 +211,18 @@ namespace Game.Editor
             fog.enabled.overrideState = true;
             fog.enabled.value = true;
             fog.meanFreePath.overrideState = true;
-            fog.meanFreePath.value = 120f;
+            // Metres of visibility before the fog is fully opaque. 120 is atmosphere you
+            // notice only on the far shore; this is low enough that the lamps carve visible
+            // cones out of it, which is the whole point of turning volumetrics on.
+            fog.meanFreePath.value = FOG_MEAN_FREE_PATH;
+            fog.baseHeight.overrideState = true;
+            fog.baseHeight.value = 0f;
+            fog.maximumHeight.overrideState = true;
+            // Sits on the water and thins out above head height - fog that fills the sky
+            // just greys the whole frame out instead of pooling around the pier.
+            fog.maximumHeight.value = FOG_TOP_HEIGHT;
+            fog.depthExtent.overrideState = true;
+            fog.depthExtent.value = 120f;
             fog.albedo.overrideState = true;
             fog.albedo.value = new Color(0.42f, 0.47f, 0.55f);
             // Volumetrics are what make the pier lamps read as lamps in fog rather than as
@@ -194,7 +232,20 @@ namespace Game.Editor
             fog.anisotropy.overrideState = true;
             fog.anisotropy.value = 0.6f;
 
-            AssetDatabase.CreateAsset(profile, "Assets/_Game/UI/MenuHarbourProfile.asset");
+            // THE step that is easy to miss and fails silently. VolumeComponents are
+            // separate ScriptableObjects; CreateAsset serialises only the profile, so
+            // without parenting each one into the asset the profile reloads with an EMPTY
+            // component list - a global volume that overrides nothing, which is exactly a
+            // scene that stubbornly stays daylit with no fog.
+            foreach (var component in profile.components)
+            {
+                component.hideFlags = HideFlags.HideInHierarchy;
+                AssetDatabase.AddObjectToAsset(component, profile);
+            }
+            EditorUtility.SetDirty(profile);
+            AssetDatabase.SaveAssets();
+            AssetDatabase.ImportAsset(PROFILE_PATH, ImportAssetOptions.ForceUpdate);
+            volume.sharedProfile = AssetDatabase.LoadAssetAtPath<VolumeProfile>(PROFILE_PATH);
         }
 
         // ---------------- water ----------------
@@ -271,8 +322,10 @@ namespace Game.Editor
                     new Vector3(0.12f, 3f, 0.12f), metal);
                 TestMaterials.Box("Head", post, new Vector3(-0.3f, 2.95f, 0f),
                     new Vector3(0.55f, 0.22f, 0.4f), metal);
+                // 5000 lm matches what the world scene uses for practicals at this same
+                // night exposure; 2600 read as barely-on.
                 Lamp(post, new Vector3(-0.3f, 2.8f, 0f),
-                     new Color(1f, 0.80f, 0.55f), 2600f, 14f);
+                     new Color(1f, 0.80f, 0.55f), PIER_LAMP_LUMENS, 16f);
             }
         }
 
@@ -291,14 +344,27 @@ namespace Game.Editor
             var light = go.AddComponent<Light>();
             light.type = LightType.Point;
             light.color = color;
-            light.range = range;
             light.shadows = LightShadows.None;   // scenery; shadows here buy nothing
 
-            var data = go.AddComponent<HDAdditionalLightData>();
-            data.SetIntensity(lumens, LightUnit.Lumen);
+            // HDRP auto-attaches this alongside a Light, and adding a second one would
+            // leave the renderer reading the default.
+            var data = go.GetComponent<HDAdditionalLightData>();
+            if (data == null) data = go.AddComponent<HDAdditionalLightData>();
+
+            // Order matters, and getting it wrong is silent: HDRP re-derives intensity from
+            // the emitting shape, so range has to be final BEFORE the value is written.
+            // Writing lightUnit then intensity is also not interchangeable with
+            // SetIntensity(value, unit) - that ran the lumen conversion a second time and
+            // left every lamp 4*PI too dim, which is exactly "can't see light from poles".
             data.range = range;
-            data.volumetricDimmer = 1.6f;
+            data.lightUnit = LightUnit.Lumen;
+            data.intensity = lumens;
             data.EnableColorTemperature(false);
+
+            // Without this the lamp lights surfaces but leaves the fog untouched - no
+            // glow, no cone. It is most of what makes a foggy night read as one.
+            data.affectsVolumetric = true;
+            data.volumetricDimmer = 2.2f;
         }
 
         // ---------------- boat ----------------
@@ -333,8 +399,8 @@ namespace Game.Editor
                 TestMaterials.Box($"Rail_{i}", visual, new Vector3(i * 2.6f, 1.4f, 2f),
                     new Vector3(0.14f, 1f, 8f), trim);
 
-            Lamp(visual, new Vector3(0f, 3.4f, -3.2f), new Color(1f, 0.86f, 0.66f), 3200f, 12f);
-            Lamp(visual, new Vector3(0f, 1.6f, 6.4f), new Color(0.65f, 0.88f, 1f), 1400f, 8f);
+            Lamp(visual, new Vector3(0f, 3.4f, -3.2f), new Color(1f, 0.86f, 0.66f), BOAT_LAMP_LUMENS, 14f);
+            Lamp(visual, new Vector3(0f, 1.6f, 6.4f), new Color(0.65f, 0.88f, 1f), 2600f, 9f);
 
             var motion = boat.AddComponent<BoatMotion>();
             var so = new SerializedObject(motion);
@@ -377,7 +443,7 @@ namespace Game.Editor
                 // One or two lit windows each, so the far shore is not a dead band.
                 if (rng.NextDouble() < 0.7)
                     Lamp(town, new Vector3(x, h * 0.55f, z - w * 0.45f),
-                         new Color(1f, 0.72f, 0.42f), 900f, 9f);
+                         new Color(1f, 0.72f, 0.42f), WINDOW_LUMENS, 11f);
             }
         }
 
