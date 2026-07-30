@@ -90,7 +90,7 @@ namespace Game.World
                  "already lashed into a placement zone always needs Space - see CraneHook.")]
         [SerializeField] private bool autoGrabLoose = true;
 
-        [Header("Swing")]
+        [Header("Swing - loaded")]
         [Tooltip("How much of the boom tip's acceleration becomes swing. LOWER READS AS " +
                  "HEAVIER: a loaded hook resists being flicked around, so it lags the boom " +
                  "instead of chasing it. This is the main weight knob.")]
@@ -101,6 +101,20 @@ namespace Game.World
         [Tooltip("Ceiling on the swing angle. A crane load free to reach 60 degrees would be " +
                  "through the wheelhouse window.")]
         [SerializeField] private float maxSwingDegrees = 20f;
+
+        [Header("Swing - empty")]
+        [Tooltip("A bare block is light and whips around; a loaded one is heavy and does not. " +
+                 "These are the empty-hook values, blended toward the loaded ones above as " +
+                 "soon as something is on the hook - so the rope visibly stiffens under load, " +
+                 "which is the read on whether the grab worked.")]
+        [SerializeField, Range(0f, 1f)] private float emptySwingResponse = 0.85f;
+        [SerializeField] private float emptySwingDamping = 0.75f;
+        [Tooltip("An empty hook can swing further because there is nothing on it to hit " +
+                 "anything with.")]
+        [SerializeField] private float emptyMaxSwingDegrees = 32f;
+        [Tooltip("How fast the rope changes character when a load is taken or dropped, per " +
+                 "second. Instant would snap the swing mid-arc.")]
+        [SerializeField] private float loadBlendRate = 1.6f;
         [Tooltip("Drive acceleration is clamped to this. A teleport - a boat respawning, the " +
                  "mooring settling on the first frame - is an near-infinite acceleration and " +
                  "would otherwise fire the load straight out sideways.")]
@@ -129,6 +143,9 @@ namespace Game.World
         private float _swingVelocityA, _swingVelocityB;
         private Vector3 _lastTip, _tipVelocity, _tipAcceleration;
         private bool _swingInitialised;
+        // 0 = bare block, 1 = loaded. Eased so the rope stiffens over about half a second
+        // rather than changing character on the frame the grab lands.
+        private float _loadBlend;
 
         // The load that was just let go of. Excluded from AUTO grab until it has drifted clear,
         // or releasing over the water would re-hook it on the very next frame - see
@@ -402,9 +419,17 @@ namespace Game.World
             _tipAcceleration = Vector3.Lerp(_tipAcceleration, acceleration,
                 1f - Mathf.Exp(-10f * dt));
 
+            // An empty block is light and lively; a loaded one is heavy and lags. Blended
+            // rather than switched, so taking a load reads as the rope going taut.
+            _loadBlend = Mathf.MoveTowards(_loadBlend,
+                hook != null && hook.First != null ? 1f : 0f, loadBlendRate * dt);
+            float response = Mathf.Lerp(emptySwingResponse, swingResponse, _loadBlend);
+            float damping = Mathf.Lerp(emptySwingDamping, swingDamping, _loadBlend);
+            float swingLimit = Mathf.Lerp(emptyMaxSwingDegrees, maxSwingDegrees, _loadBlend);
+
             Vector3 drive = Vector3.ClampMagnitude(
                 new Vector3(_tipAcceleration.x, 0f, _tipAcceleration.z),
-                maxDriveAcceleration) * swingResponse;
+                maxDriveAcceleration) * response;
 
             // Period comes from the rope length, exactly as a real pendulum's does, so hauling
             // the load right up under the block makes it snappy and paying out a full drum
@@ -416,16 +441,16 @@ namespace Game.World
             // Positive A tilts the load toward -Z, so +Z drive pushes A up. Positive B tilts it
             // toward +X, so +X drive pushes B down. Both restore toward zero.
             float accelA = (-gravity * Mathf.Sin(_swingA) + drive.z * Mathf.Cos(_swingA)) / length
-                           - swingDamping * _swingVelocityA;
+                           - damping * _swingVelocityA;
             float accelB = (-gravity * Mathf.Sin(_swingB) - drive.x * Mathf.Cos(_swingB)) / length
-                           - swingDamping * _swingVelocityB;
+                           - damping * _swingVelocityB;
 
             _swingVelocityA += accelA * dt;
             _swingVelocityB += accelB * dt;
             _swingA += _swingVelocityA * dt;
             _swingB += _swingVelocityB * dt;
 
-            float limit = maxSwingDegrees * Mathf.Deg2Rad;
+            float limit = swingLimit * Mathf.Deg2Rad;
             if (Mathf.Abs(_swingA) > limit)
             {
                 _swingA = Mathf.Sign(_swingA) * limit;
@@ -556,7 +581,7 @@ namespace Game.World
             Vector3 point = cargo.transform.position;
             var zone = PlacementZone.Find(point);
             if (zone != null && zone.Plan(cargo.gameObject, point,
-                    cargo.transform.eulerAngles.y, out var planned, out var plannedRotation))
+                    cargo.transform.rotation, out var planned, out var plannedRotation))
             {
                 cargo.ServerAttach(zone, planned, plannedRotation);
                 return;
@@ -580,7 +605,7 @@ namespace Game.World
             var zone = PlacementZone.Find(point);
             if (zone == null) return;
 
-            bool valid = zone.Plan(load.gameObject, point, load.transform.eulerAngles.y,
+            bool valid = zone.Plan(load.gameObject, point, load.transform.rotation,
                 out var position, out var rotation);
             PlacementGhost.Show(load.gameObject, position, rotation, valid);
         }

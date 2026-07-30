@@ -457,16 +457,20 @@ namespace Game.Editor
             zoneGO.transform.SetParent(boat, false);
             zoneGO.transform.localPosition = ZoneCentre;
 
-            // The border is PAINT ON THE DECK, so it goes on the rolling hull and stays glued
-            // to the planking. The logical region behind it stays level with the deck collider,
-            // and the ghost - not the border - is the authority on where cargo will actually
-            // land. They agree in ordinary water and diverge by the roll angle in a storm.
-            var outline = CargoBuilder.BuildZoneOutline(
-                RollingTwin(hull, "CargoZoneRig", zoneGO.transform),
-                Vector3.zero, ZoneSize, 0.35f, outlineMaterial);
+            // The border is PAINT ON THE DECK, and so is the region itself: the rolling twin is
+            // both the outline's parent AND the zone's attach root, so the marking, the logical
+            // region and the stowed cargo all lean together with the planking. PlacementZone
+            // does all its planning in the attach root's frame, which is what keeps a crate
+            // lashed during a lean square to the deck rather than baking that lean in.
+            var rig = RollingTwin(hull, "CargoZoneRig", zoneGO.transform);
+            var outline = CargoBuilder.BuildZoneOutline(rig, Vector3.zero, ZoneSize, 0.35f,
+                outlineMaterial);
 
             var zone = zoneGO.AddComponent<PlacementZone>();
             var so = new SerializedObject(zone);
+            // Inherited from CargoAnchor. Stowed cargo is parented here, so it rolls with the
+            // hull instead of sitting bolt upright on a leaning deck.
+            so.FindProperty("attachRoot").objectReferenceValue = rig;
             so.FindProperty("center").vector3Value = Vector3.zero;
             so.FindProperty("size").vector3Value = ZoneSize;
             // Fine enough to only take the wobble out of a hand-held pose, coarse enough that
@@ -642,6 +646,16 @@ namespace Game.Editor
             cso.FindProperty("deckCenter").vector3Value = new Vector3(0f, 1.6f, -0.5f);
             cso.FindProperty("deckSize").vector3Value = new Vector3(6.2f, 9f, 19f);
             cso.ApplyModifiedPropertiesWithoutUndo();
+
+            // Same volume, for loose cargo rather than people. Added after BoatMotion so
+            // component order runs its LateUpdate second, and deliberately WITHOUT a
+            // RequireComponent - see the note in DeckCargoCarry.
+            var cargo = boat.AddComponent<DeckCargoCarry>();
+            var dso = new SerializedObject(cargo);
+            dso.FindProperty("deckCenter").vector3Value = new Vector3(0f, 1.6f, -0.5f);
+            dso.FindProperty("deckSize").vector3Value = new Vector3(6.2f, 9f, 19f);
+            dso.FindProperty("grip").floatValue = 6f;
+            dso.ApplyModifiedPropertiesWithoutUndo();
         }
 
         /// <summary>

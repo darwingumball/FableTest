@@ -129,7 +129,7 @@ namespace Game.Interaction
 
             _planZone = zone;
             _planValid = zone.Plan(_heldBody.gameObject, point,
-                _heldBody.transform.eulerAngles.y, out _planPosition, out _planRotation);
+                _heldBody.transform.rotation, out _planPosition, out _planRotation);
             PlacementGhost.Show(_heldBody.gameObject, _planPosition, _planRotation, _planValid);
         }
 

@@ -17,6 +17,14 @@ namespace Game.World
     /// pose; it never moves anything. The carrying client calls it every frame for the ghost
     /// and the server calls it once on release to decide what actually happens, so both
     /// arrive at the same answer without the client being trusted for the result.
+    ///
+    /// EVERYTHING HAPPENS IN <see cref="CargoAnchor.AttachRoot"/>'S FRAME, not this
+    /// transform's. The two are usually the same object, but on a boat the attach root is a
+    /// node under the rolling hull, and that is what makes cargo lie flat on a deck that is
+    /// leaning: the region rolls with the deck it is painted on, "down" for the resting sweep
+    /// is the deck's own down, and the quarter-turn yaw snap is relative to the deck rather
+    /// than to the world. Since the pose is stored relative to the attach root anyway, a crate
+    /// lashed during a lean stays square to the planking instead of baking that lean in.
     /// </summary>
     public class PlacementZone : CargoAnchor
     {
@@ -76,14 +84,15 @@ namespace Game.World
                 && Mathf.Abs(local.z) <= half.z;
         }
 
-        // Scale-free conversions. InverseTransformPoint would divide by the zone's lossy
-        // scale, so a zone that someone scaled in the inspector would quietly shrink its own
-        // region while the gizmo kept drawing the authored size.
+        // Scale-free conversions against the ATTACH ROOT's frame - see the class summary.
+        // InverseTransformPoint would divide by lossy scale, so a zone that someone scaled in
+        // the inspector would quietly shrink its own region while the gizmo kept drawing the
+        // authored size.
         private Vector3 ToZone(Vector3 world) =>
-            Quaternion.Inverse(transform.rotation) * (world - transform.position);
+            Quaternion.Inverse(AttachRoot.rotation) * (world - AttachRoot.position);
 
         private Vector3 ToWorld(Vector3 zoneLocal) =>
-            transform.position + transform.rotation * zoneLocal;
+            AttachRoot.position + AttachRoot.rotation * zoneLocal;
 
         // ---------------- planning ----------------
 
@@ -93,18 +102,20 @@ namespace Game.World
         /// somewhere, and drawing it at the rejected position is what tells the player *why*
         /// it is red.
         /// </summary>
-        public bool Plan(GameObject cargo, Vector3 desiredPosition, float desiredYaw,
+        public bool Plan(GameObject cargo, Vector3 desiredPosition, Quaternion desiredRotation,
             out Vector3 worldPosition, out Quaternion worldRotation)
         {
             Bounds own = CargoBounds.InOwnFrame(cargo);
+            Quaternion frame = AttachRoot.rotation;
 
-            // Yaw to the nearest quarter turn of the zone's own heading.
-            float zoneYaw = transform.eulerAngles.y;
-            float snapped = Mathf.Round(Mathf.DeltaAngle(zoneYaw, desiredYaw) / 90f) * 90f;
-            worldRotation = Quaternion.Euler(0f, zoneYaw + snapped, 0f);
+            // Yaw to the nearest quarter turn WITHIN the attach root's frame, so cargo ends up
+            // square to the deck rather than square to the world.
+            Quaternion desiredLocalRotation = Quaternion.Inverse(frame) * desiredRotation;
+            float snapped = Mathf.Round(desiredLocalRotation.eulerAngles.y / 90f) * 90f;
+            Quaternion relative = Quaternion.Euler(0f, snapped, 0f);
+            worldRotation = frame * relative;
 
             // Everything below is in zone space, relative to the region centre.
-            Quaternion relative = Quaternion.Inverse(transform.rotation) * worldRotation;
             Vector3 offset = relative * own.center;         // origin -> collider centroid
             Vector3 extents = AxisExtents(relative, own.extents);
 
@@ -147,7 +158,7 @@ namespace Game.World
             // exactly touching whatever it is resting on, and every legal placement would
             // report itself blocked by its own support.
             Vector3 testCentre = worldPosition + worldRotation * own.center;
-            var hits = Physics.OverlapBox(testCentre, extents * 0.9f, transform.rotation,
+            var hits = Physics.OverlapBox(testCentre, extents * 0.9f, frame,
                 blockMask, QueryTriggerInteraction.Ignore);
             foreach (var hit in hits)
                 if (!IsPartOf(hit, cargo)) return false;
@@ -169,7 +180,11 @@ namespace Game.World
                                           Mathf.Max(extents.z - 0.01f, 0.01f));
             float distance = size.y + 1f;
 
-            var hits = Physics.BoxCastAll(start, castExtents, Vector3.down, transform.rotation,
+            // Swept along the DECK's down, not the world's. On a leaning hull those differ by
+            // the roll angle, and sweeping along world down would find the deck at a slightly
+            // wrong place and float the cargo above it on one side of the boat.
+            Vector3 down = -AttachRoot.up;
+            var hits = Physics.BoxCastAll(start, castExtents, down, AttachRoot.rotation,
                 distance, blockMask, QueryTriggerInteraction.Ignore);
 
             bool found = false;
@@ -187,8 +202,9 @@ namespace Game.World
 
             if (!found) return false;
 
-            float surfaceWorldY = start.y - best - probeSkin;
-            supportY = ToZone(new Vector3(start.x, surfaceWorldY, start.z)).y - center.y;
+            // Where the sweep's bottom face came to rest, expressed back in zone space.
+            Vector3 surface = start + down * (best + probeSkin);
+            supportY = ToZone(surface).y - center.y;
             return true;
         }
 
@@ -213,8 +229,10 @@ namespace Game.World
 
         private void OnDrawGizmosSelected()
         {
+            // Drawn in the attach root's frame, because that is the frame the region actually
+            // lives in - on a boat this leans with the deck.
             Gizmos.color = new Color(0.3f, 1f, 0.4f, 0.9f);
-            Gizmos.matrix = Matrix4x4.TRS(transform.position, transform.rotation, Vector3.one);
+            Gizmos.matrix = Matrix4x4.TRS(AttachRoot.position, AttachRoot.rotation, Vector3.one);
             Gizmos.DrawWireCube(center, size);
         }
     }

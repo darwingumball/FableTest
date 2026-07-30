@@ -721,6 +721,17 @@ namespace Game.Editor
             cso.FindProperty("deckCenter").vector3Value = new Vector3(0f, 0.4f, 0f);
             cso.FindProperty("deckSize").vector3Value = new Vector3(5.4f, 6.8f, 14.4f);
             cso.ApplyModifiedPropertiesWithoutUndo();
+
+            // Loose cargo gets carried too, or a crate set down on this deck just slides aft
+            // until it hits the transom - the deck teleports rather than moving, so PhysX never
+            // gives it any of the boat's motion. Same volume as the riders', which also covers
+            // the hold. Added after BoatMotion so its LateUpdate runs second.
+            var cargo = boat.AddComponent<DeckCargoCarry>();
+            var dso = new SerializedObject(cargo);
+            dso.FindProperty("deckCenter").vector3Value = new Vector3(0f, 0.4f, 0f);
+            dso.FindProperty("deckSize").vector3Value = new Vector3(5.4f, 6.8f, 14.4f);
+            dso.FindProperty("grip").floatValue = 6f;
+            dso.ApplyModifiedPropertiesWithoutUndo();
         }
 
         private static void AddDeckPiece(GameObject boat, Vector3 centre, Vector3 size)

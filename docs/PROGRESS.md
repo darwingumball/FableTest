@@ -532,6 +532,11 @@ MapCamera — prefabs cannot store scene references, so that link lives on the i
     zero, 1.4–5° on a gentle slew and clamped at 20° on a hard one, settling in 0.5 s on a short
     rope and 4.4 s on a long one.
 
+    **Empty and loaded are separate sets of values**, blended by `loadBlendRate` rather than
+    switched, so taking a load reads as the rope going taut — which doubles as the feedback that
+    the grab actually worked. A bare block swings 3.7× further than a loaded one on the same slew
+    (23.8° against 6.5°, 5 m rope, 4 m/s² for 1.5 s).
+
 58. **Never read a component off a scene you have just closed.** `EditorSceneManager.CloseScene`
     destroys the objects, so a `Debug.Log` at the end of a builder that reports
     `zone.Index` throws `MissingReferenceException` *after* the scene has already been saved
@@ -586,31 +591,65 @@ Design notes that cost thought:
   controller, so the interaction raycast can still resolve it (gotcha 34) and it does not swing
   out from under the crosshair on every wave.
 
-### What still does not roll, and why (open question for Evan)
+### What rolls with the hull, and how (2026-07-29)
 
 `RollingTwin` in `CrabBoatBuilder` is the pattern: a visual node under the hull at the same
-boat-local pose as a logic node on the level root. Crane boom, both ladders and the zone border
-all use it, so they lean with the boat.
+boat-local pose as a logic node on the level root. The two coincide at zero roll and separate by
+the roll angle. Crane boom, both ladders, the zone border **and stowed cargo** all use it.
 
-**Stowed cargo and the logical placement region still stay level**, and cannot be fixed the same
-way, because they are coupled to the deck COLLIDER staying level — which is the decision the
-whole boat rests on (a CharacterController is always world-upright and slides off any tilted
-collider). Specifically:
+For the cargo zone the twin is doing double duty — it is the outline's parent AND the zone's
+`CargoAnchor.AttachRoot`. That one field is what makes stowed cargo lean with the deck, and it
+works because **`PlacementZone.Plan` does all its planning in the attach root's frame**, not its
+own transform's:
 
-- Cargo parented to a rolling anchor would have a tilted collider, so a player standing on a
-  crate would slide off it, and the crate's collider would no longer be flush with the level
-  deck collider (~0.9 m out at 18° roll, three metres off centreline).
-- `CargoAttachment` stores its pose relative to `CargoAnchor.AttachRoot`, so pointing a zone's
-  `attachRoot` at a rolling twin is a one-field change — but it would bake the roll angle at the
-  moment of placement into the stored pose, leaving a crate permanently askew if it was lashed
-  during a lean. Making that right means `PlacementZone.Plan` snapping yaw in the attach root's
-  frame while doing containment in the level frame.
+- The quarter-turn yaw snap is relative to the deck, so a crate lashed during a lean ends up
+  square to the planking instead of baking that lean into its stored pose.
+- The rest-height sweep runs along the deck's own down (`-AttachRoot.up`), so cargo lies flush on
+  a tilted deck instead of floating above it on one side of the boat.
+- `Contains` is in the same frame, so the region itself rolls — the lashing area is part of the
+  deck, not a box hanging in the air above it.
 
-The real fix is to **tilt the deck collider with the hull and stop the CharacterController
-sliding** (detect "standing on a boat", project movement onto the deck plane, cancel
-gravity-induced drift). That makes deck, crane, ladders, zone and cargo all roll together —
-which is what "so it's all the same" actually asks for — but it changes the foundation every
-boat is built on, so it is not something to do quietly.
+On land the attach root is the level property root, so this all degenerates to the obvious
+behaviour. That is the reason to express it this way rather than special-casing boats.
+
+**Known cost:** a stowed crate's collider now tilts, so it is up to ~0.9 m off the LEVEL deck
+collider at full roll three metres off centreline, and a player standing on a crate in a big sea
+will drift. That is the same compromise the visual deck has always made (gotcha 33), just now
+visible on something you can walk on. The way out, if it ever matters, is to tilt the deck
+collider itself and stop the CharacterController sliding — detect "standing on a boat", project
+movement onto the deck plane, cancel gravity-induced drift. That would make everything roll
+together with no split at all, but it changes the foundation every boat is built on.
+
+### Loose cargo on a moving deck (2026-07-29)
+
+`DeckCargoCarry`. **A kinematic collider that teleports never pushes anything.** `BoatMotion`
+writes the hull transform outright, so PhysX gives the deck no velocity and a crate resting on it
+gets no friction — the crate stands still in world space while the boat slides out from under it,
+which reads as the crate rolling aft at exactly the boat's speed and piling against the transom.
+Nothing about the crate is wrong; it is being simulated in the wrong frame of reference.
+
+Fixed by supplying the missing force: anything loose inside the deck volume has its **horizontal**
+velocity eased toward the velocity the deck has at that point, rotation included (without the
+`ω × r` term, cargo stowed out on the rail stays put while the boat turns underneath it and goes
+over the side). Vertical is untouched — falling, settling and floating belong to gravity and
+`Buoyancy`.
+
+`grip` is the whole feel knob. Measured against the crab boat getting under way (0.8 m/s² to
+7.5 m/s, then steady):
+
+| grip | max aft slide | verdict |
+|---|---|---|
+| 0 | **190 m and climbing** | the bug: unbounded, ends at the transom |
+| 3 | 2.44 m | slithery |
+| 6 | 1.19 m | shipped — slides while accelerating, then settles |
+| 12 | 0.56 m | nearly bolted down |
+
+Owner-only, like `Buoyancy`: world items are owner-authoritative, so every peer writing
+velocities would fight the transform sync. Kinematic bodies are skipped, which covers both lashed
+cargo and the hull itself.
+
+Deliberately **no `[RequireComponent(typeof(BoatMotion))]`** — see gotcha 55. It is added to each
+boat after `BoatMotion` so component order runs its `LateUpdate` second.
 
 
 ## Performance: measured, not assumed (2026-07-28)

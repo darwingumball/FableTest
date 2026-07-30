@@ -233,7 +233,7 @@ namespace Game.World
         {
             if (anchor is PlacementZone zone)
             {
-                if (!zone.Plan(gameObject, worldPosition, worldRotation.eulerAngles.y,
+                if (!zone.Plan(gameObject, worldPosition, worldRotation,
                         out var planned, out var plannedRotation))
                     return;
                 ServerAttach(anchor, planned, plannedRotation);
