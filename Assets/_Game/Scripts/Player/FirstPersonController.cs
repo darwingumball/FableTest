@@ -46,6 +46,10 @@ namespace Game.Player
         [Tooltip("How far the head can rise above the waterline while swimming up. Without " +
                  "this cap you launch clear of the water like a cork.")]
         [SerializeField] private float swimSurfaceClamp = 0.25f;
+        [Tooltip("Max approach speed toward the tether depth set by Game.World.DiveSuit. Not " +
+                 "an instant snap, so the winch reeling in fast still reads as being pulled " +
+                 "rather than teleporting.")]
+        [SerializeField] private float tetherFollowSpeed = 2.5f;
 
         [Header("Crouch")]
         [SerializeField] private float standHeight = 1.9f;
@@ -90,6 +94,8 @@ namespace Game.Player
         private float _submersion;
         private float _waterSurfaceY;
         private bool _climbing;
+        private bool _tethered;
+        private float _tetherDepth;
 
         /// <summary>
         /// Re-reads facing from the transform. Call after any external repositioning
@@ -161,6 +167,17 @@ namespace Game.Player
         }
 
         public bool IsSwimming => _inWater;
+
+        /// <summary>
+        /// Hands VERTICAL position to a dive rig's rope, the same way <see cref="SetClimbing"/>
+        /// hands ALL position to a ladder - horizontal swimming stays the player's own, only
+        /// depth is taken over. See <see cref="Game.World.DiveSuit"/>.
+        /// </summary>
+        public void SetTethered(bool tethered) => _tethered = tethered;
+
+        /// <summary>World-space Y the tether is currently trying to hold the player at. Set
+        /// every frame by DiveSuit as the rig's rope length changes.</summary>
+        public void SetTetherDepth(float worldY) => _tetherDepth = worldY;
 
         private void Awake()
         {
@@ -272,7 +289,8 @@ namespace Game.Player
 
             if (_inWater)
             {
-                ApplySwimming(wishDirRaw);
+                if (_tethered) ApplyTethered(wishDirRaw);
+                else ApplySwimming(wishDirRaw);
                 return;
             }
 
@@ -333,6 +351,30 @@ namespace Game.Player
                 else vertical = Mathf.Min(vertical, headroom / Mathf.Max(Time.deltaTime, 1e-4f));
             }
             _velocity.y = vertical;
+
+            _controller.Move(_velocity * Time.deltaTime);
+        }
+
+        /// <summary>
+        /// Diving on a rig's tether. Horizontal is ordinary free swimming; vertical is NOT
+        /// player input at all - it eases toward <see cref="_tetherDepth"/>, which
+        /// <see cref="Game.World.DiveSuit"/> sets from the rig's live rope length every frame.
+        /// That is "the winch lifts or lowers the diver" made literal: jump/crouch do not move
+        /// you here, they are read by DiveSuit as a SIGNAL to the rig instead, and the rig
+        /// changing the rope is what moves you, next frame, through this same method.
+        /// </summary>
+        private void ApplyTethered(Vector3 wishDir)
+        {
+            Vector3 horizontal = wishDir * (swimSpeed * _speedMultiplier);
+            _velocity.x = horizontal.x;
+            _velocity.z = horizontal.z;
+
+            // Moves toward the target at a capped rate rather than snapping straight to it -
+            // an operator hauling the rope in fast should read as being pulled up, not as
+            // teleporting.
+            float dy = _tetherDepth - transform.position.y;
+            float dt = Mathf.Max(Time.deltaTime, 1e-4f);
+            _velocity.y = Mathf.Clamp(dy / dt, -tetherFollowSpeed, tetherFollowSpeed);
 
             _controller.Move(_velocity * Time.deltaTime);
         }

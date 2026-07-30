@@ -20,12 +20,18 @@ namespace Game.UI
         [SerializeField] private UnityEngine.UI.Image refuelTankFill;
         [SerializeField] private TMP_Text refuelTankLabel;
 
+        [Header("Diving")]
+        [SerializeField] private GameObject divePanel;
+        [SerializeField] private UnityEngine.UI.Image diveAirFill;
+        [SerializeField] private TMP_Text diveInfoLabel;
+
         private NetworkPlayer _bound;
 
         private void OnEnable()
         {
             promptLabel.text = "";
             if (refuelPanel != null) refuelPanel.SetActive(false);
+            if (divePanel != null) divePanel.SetActive(false);
             NetworkPlayer.OnLocalPlayerReady += Bind;
             if (NetworkPlayer.Local != null) Bind(NetworkPlayer.Local);
         }
@@ -86,6 +92,44 @@ namespace Game.UI
             }
 
             UpdateRefuelMeter(uiOpen);
+            UpdateDivePanel(uiOpen);
+        }
+
+        /// <summary>
+        /// Two different readouts depending on <see cref="DiveMode"/>, because the two states
+        /// have nothing in common to show: Tethered has unlimited air but a rope length worth
+        /// knowing, Free has no rope at all but a draining reserve worth watching closely.
+        /// </summary>
+        private void UpdateDivePanel(bool uiOpen)
+        {
+            if (divePanel == null) return;
+
+            var suit = _bound != null ? _bound.GetComponent<DiveSuit>() : null;
+            bool diving = suit != null && suit.IsDiving && !uiOpen;
+            divePanel.SetActive(diving);
+            if (!diving) return;
+
+            var rig = suit.CurrentRig;
+            if (suit.Mode == DiveMode.Tethered && rig != null)
+            {
+                if (diveAirFill != null) diveAirFill.gameObject.SetActive(false);
+                if (diveInfoLabel != null)
+                {
+                    float depth = rig.AnchorPoint.position.y - _bound.transform.position.y;
+                    diveInfoLabel.text = $"Tethered - depth {depth:0.0} m " +
+                                         $"(rope {rig.RopeLength:0.0}/{rig.MaxRopeLength:0} m)";
+                }
+                return;
+            }
+
+            if (diveAirFill != null)
+            {
+                diveAirFill.gameObject.SetActive(true);
+                diveAirFill.fillAmount = suit.ReserveCapacity > 0f
+                    ? suit.ReserveOxygen / suit.ReserveCapacity : 0f;
+            }
+            if (diveInfoLabel != null)
+                diveInfoLabel.text = $"Reserve air: {suit.ReserveOxygen:0} s";
         }
 
         /// <summary>

@@ -653,6 +653,13 @@ namespace Game.Editor
             hso.FindProperty("fuelBurnLitersPerHour").floatValue = 40f;
             hso.ApplyModifiedPropertiesWithoutUndo();
 
+            // Dive rig, starboard side forward of the hold - clear of the hold's own hull
+            // (x up to about 1.8) and of the boarding ladder (port side, z=5.4). Yawed 90 so
+            // the rig's own +Z (davit/anchor/exit) points to starboard, out past the rail.
+            DiveSystemBuilder.BuildDiveRig(boat.transform,
+                new Vector3(2.0f, 0.8f, 5.0f), localYaw: 90f, outboardOffset: 1.0f,
+                maxRopeLength: 25f, trim, hullPaint);
+
             // Wake. Both hang off the LEVEL root, so they stay square to the water while
             // the hull rolls - a decal is projected straight down, and letting it roll with
             // the visual would swing the wake out from under the boat.

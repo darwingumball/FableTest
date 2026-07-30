@@ -253,6 +253,7 @@ namespace Game.Editor
             var root = PrefabUtility.LoadPrefabContents(PLAYER_PREFAB_PATH);
             Ensure<PlayerInventory>(root);
             Ensure<PhysicsPickup>(root);
+            Ensure<DiveSuit>(root);
 
             var cam = root.GetComponentInChildren<Camera>(true);
             if (cam != null && previewLayer >= 0)

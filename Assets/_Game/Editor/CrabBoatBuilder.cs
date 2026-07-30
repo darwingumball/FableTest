@@ -147,6 +147,14 @@ namespace Game.Editor
             hso.FindProperty("fuelBurnLitersPerHour").floatValue = 55f;
             hso.ApplyModifiedPropertiesWithoutUndo();
 
+            // Dive rig at the stern, starboard quarter - opposite side from the boarding
+            // ladder (port, x=-3.35) and well aft of the cargo zone (which stops at z=-6.8).
+            // Yawed 90 so the rig's own +Z (davit/anchor/exit direction) points to starboard,
+            // out over open water past the hull.
+            DiveSystemBuilder.BuildDiveRig(boat.transform,
+                new Vector3(2.8f, DECK_TOP, -8.5f), localYaw: 90f, outboardOffset: 1.1f,
+                maxRopeLength: 30f, trim, hullPaint);
+
             BuildMotion(boat, hull, helm);
             BuildWake(boat);
 

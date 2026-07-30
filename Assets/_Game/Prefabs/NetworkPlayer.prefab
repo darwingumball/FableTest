@@ -138,6 +138,7 @@ GameObject:
   - component: {fileID: 5635842171739908208}
   - component: {fileID: 2707463867120099272}
   - component: {fileID: 2470505975939137723}
+  - component: {fileID: 2964937202809226639}
   m_Layer: 0
   m_Name: NetworkPlayer
   m_TagString: Untagged
@@ -285,6 +286,7 @@ MonoBehaviour:
   swimUpSpeed: 2.6
   sinkSpeed: 1.1
   swimSurfaceClamp: 0.25
+  tetherFollowSpeed: 2.5
   standHeight: 1.9
   crouchHeight: 1.2
   crouchLerpSpeed: 10
@@ -410,6 +412,23 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   swimStartHeight: 1.15
   exitMargin: 0.2
+--- !u!114 &2964937202809226639
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7966876674051179714}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e422908a8b9831b4484c759cfad3cfb9, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  ShowTopMostFoldoutHeaderGroup: 1
+  reserveCapacitySeconds: 90
+  reserveDrainPerMetreDepth: 0.02
+  noAirDamagePerSecond: 8
+  signalRate: 0.9
 --- !u!1 &9034621117230293554
 GameObject:
   m_ObjectHideFlags: 0

@@ -35,6 +35,8 @@ namespace Game.Editor
                 if (oldClock != null) Object.DestroyImmediate(oldClock.gameObject);
                 var oldRefuel = hud.Find("RefuelPanel");
                 if (oldRefuel != null) Object.DestroyImmediate(oldRefuel.gameObject);
+                var oldDive = hud.Find("DivePanel");
+                if (oldDive != null) Object.DestroyImmediate(oldDive.gameObject);
 
                 // Health bar, bottom-left.
                 var barGO = new GameObject("HealthBar", typeof(Image));
@@ -91,6 +93,19 @@ namespace Game.Editor
                 var (containerFill, containerLabel) = MeterRow(panelRt, "Container", new Vector2(0, 34));
                 var (tankFill, tankLabel) = MeterRow(panelRt, "Tank", new Vector2(0, 2));
 
+                // Dive readout, upper-centre - well clear of the refuel panel (the two never
+                // show at once, but there is no reason to make that an assumption the layout
+                // depends on).
+                var diveGO = new GameObject("DivePanel");
+                diveGO.transform.SetParent(hud, false);
+                var diveRt = diveGO.AddComponent<RectTransform>();
+                diveRt.anchorMin = diveRt.anchorMax = new Vector2(0.5f, 0.82f);
+                diveRt.pivot = new Vector2(0.5f, 1f);
+                diveRt.sizeDelta = new Vector2(360, 32);
+                diveGO.SetActive(false);
+
+                var (diveFill, diveLabel) = MeterRow(diveRt, "Air", new Vector2(0, 0));
+
                 var hudCtrl = hud.GetComponent<HUDController>();
                 var so = new SerializedObject(hudCtrl);
                 so.FindProperty("healthFill").objectReferenceValue = fill;
@@ -100,6 +115,9 @@ namespace Game.Editor
                 so.FindProperty("refuelContainerLabel").objectReferenceValue = containerLabel;
                 so.FindProperty("refuelTankFill").objectReferenceValue = tankFill;
                 so.FindProperty("refuelTankLabel").objectReferenceValue = tankLabel;
+                so.FindProperty("divePanel").objectReferenceValue = diveGO;
+                so.FindProperty("diveAirFill").objectReferenceValue = diveFill;
+                so.FindProperty("diveInfoLabel").objectReferenceValue = diveLabel;
                 so.ApplyModifiedPropertiesWithoutUndo();
 
                 PrefabUtility.SaveAsPrefabAsset(root, WORLD_UI_PREFAB);

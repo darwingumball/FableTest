@@ -1209,6 +1209,56 @@ current litres, or a `Generator`'s running state - both reset to their authored 
 on load, which is a separate, smaller gap worth closing later if it turns out to matter.
 
 
+## Dive rig / tethered diving (2026-07-29)
+
+A ship fixture (`DiveRig`) plus worn gear (`DiveSuit`, on the player prefab). Both boats have
+one now, stern/starboard on the crabber, forward-starboard on the tug - opposite side from
+each boat's own boarding ladder, clear of everything else already out there.
+
+**Three states, and the whole feature is really about which one you are in.** `Surfaced`
+(everyone, normally). `Tethered` - the assisted dive the rig is FOR: air is unlimited
+(surface-supplied through the rope) and, this is the important part, **depth is not the
+player's own input at all**. `FirstPersonController.SetTethered`/`SetTetherDepth` hand
+VERTICAL position to the rig's rope length every frame, exactly the way `SetClimbing` already
+hands ALL position to a ladder - horizontal swimming stays free. Jump/Crouch, which normally
+swim up/down, are read by `DiveSuit` as a SIGNAL to the rig instead while tethered; the rig
+changing its rope is what actually moves the diver, one frame later, through that same
+tethered-movement path. `Free` is what detaching (Throw, while tethered) buys: ordinary free
+swim in every axis again, paid for with a draining reserve tank that costs health once empty -
+the "scuba" half of the ask, and the reason to stay clipped in unless there is a good reason
+not to.
+
+**Two people can move the same rope, and nothing has to arbitrate between them.** The winch
+operator (taken/released exactly like `BoatHelm`'s wheel) drives `DiveRig`'s rope length at a
+FAST rate through the normal move-stick input. The diver's own signal drives the SAME
+`NetworkVariable<float>`, at a slower self-serve rate, REGARDLESS of whether an operator is
+present. Neither has to check for the other; if both act in the same tick, the result is
+exactly what it looks like - a tug of war - which is a fine and even sensible outcome, not a
+bug to guard against. This is what lets "with a friend" and "solo, signalling" both be true of
+the exact same rope without two separate code paths.
+
+**Two interactables share one physical rig, the same way a crane's console is separate from
+the hook it operates.** `DiveRig` itself IS the winch-controls `IInteractable` (its own
+`Interact` toggles operator control). The suit-up point is a different verb at a different
+spot, so it is a SEPARATE small `DiveSuitRack : MonoBehaviour, IInteractable` that just
+forwards to `DiveRig.GetSuitPrompt`/`SuitInteract` - the same thin-forwarding shape as
+`ElevatorButtonInteractable`, reused rather than reinvented.
+
+**Detaching frees the rope immediately, even though the original diver is still down there on
+reserve air.** Once unclipped, the tether itself is available again for someone else - matches
+"you unclipped, the line is free now" and was a deliberate call, not an oversight.
+
+**Not built:** any visual/atmospheric pressure effect (vignette, distortion) at depth - the
+mechanical side (unlimited air tethered, draining and costly untethered) is what was asked for;
+a screen effect is a cheap follow-up if it turns out to matter once this is actually dived on.
+Also not built: multiple simultaneous divers per rig (one rope, one diver, by design) and a
+`goto`-style admin shortcut to the rig itself.
+
+**Untested - this needs a live session more than anything else shipped today.** The tether-depth
+follow, the signal-vs-winch tug of war, and the reserve-air damage-on-empty path all depend on
+timing and feel that only a real dive can surface.
+
+
 ## Admin console
 
 Backquote (`` ` ``) opens it. The host is admin automatically; others need
