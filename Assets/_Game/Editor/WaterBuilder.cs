@@ -644,9 +644,10 @@ namespace Game.Editor
 
             // Ship's dedicated tank, beside the wheel where a driver refuelling at port can
             // reach it without leaving the helm. Started well shy of full so running dry is
-            // something a play session can actually reach.
+            // something a play session can actually reach. Y is deck height - FuelTank is
+            // base-pivoted.
             var tank = FuelSystemBuilder.BuildFuelTank(boat.transform,
-                new Vector3(1.1f, 1.0f, -1.75f), capacityLiters: 90f, startingLiters: 35f, trim);
+                new Vector3(1.1f, 0.8f, -1.75f), capacityLiters: 90f, startingLiters: 35f, trim);
             var hso = new SerializedObject(helm);
             hso.FindProperty("fuelTank").objectReferenceValue = tank;
             hso.FindProperty("fuelBurnLitersPerHour").floatValue = 40f;

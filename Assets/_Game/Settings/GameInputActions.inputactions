@@ -87,6 +87,15 @@
                     "initialStateCheck": true
                 },
                 {
+                    "name": "Rotate",
+                    "type": "Button",
+                    "id": "9c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f",
+                    "expectedControlType": "Button",
+                    "processors": "",
+                    "interactions": "",
+                    "initialStateCheck": false
+                },
+                {
                     "name": "TabMenu",
                     "type": "Button",
                     "id": "e8f82b10-cb4a-4181-99f5-fd7b4b6030a8",
@@ -390,6 +399,17 @@
                     "processors": "",
                     "groups": ";Keyboard&Mouse",
                     "action": "AdjustHoldDistance",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                },
+                {
+                    "name": "",
+                    "id": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+                    "path": "<Keyboard>/r",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": ";Keyboard&Mouse",
+                    "action": "Rotate",
                     "isComposite": false,
                     "isPartOfComposite": false
                 },

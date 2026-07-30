@@ -231,7 +231,7 @@ namespace Game.Editor
             {
                 var container = Ensure<FuelContainer>(root);
                 var cso = new SerializedObject(container);
-                cso.FindProperty("liters").floatValue = def.fuelLiters;
+                cso.FindProperty("capacityLiters").floatValue = def.fuelLiters;
                 cso.ApplyModifiedPropertiesWithoutUndo();
             }
             else

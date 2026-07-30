@@ -32,7 +32,21 @@ namespace Game.Editor
         // Finer than a boat deck's grid - furniture is fussier about exactly where it lands
         // than a crate is.
         private const float CELL_SIZE = 0.15f;
-        private const float CORNER_MARGIN = 1.3f;
+        // Finer than a deck's 30 degrees too - furniture wants to face into a room at an
+        // angle, not just square to the walls.
+        private const float YAW_SNAP_DEGREES = 15f;
+        private const float CORNER_MARGIN = 1.5f;
+
+        // Everything this builder adds under the floor, by name - torn down before every
+        // rebuild so re-running Build Property is actually idempotent instead of piling up a
+        // second tank, and so a rebuild's bounds measurement never includes last run's own
+        // fixtures. FuelSystemBuilder names its GameObjects "FuelTank"/"Generator" regardless
+        // of caller, which is why those two names are safe to hardcode here.
+        private static readonly string[] FixtureNames =
+            { "PlacementZone", "FuelTank", "Generator", "PropertyLight_1", "PropertyLight_2" };
+        // Tank and generator are now full-size props (roughly 1x1x1.8 and 1x0.8x1.4) rather
+        // than small aimable boxes, so they need real clearance from each other.
+        private const float TANK_TO_GENERATOR_GAP = 1.4f;
 
         [MenuItem("Game/Setup/Build Property")]
         public static void Build()
@@ -70,6 +84,22 @@ namespace Game.Editor
 
             Ensure<NetworkObject>(floor);
 
+            // Torn down BEFORE measuring, not just before rebuilding. This builder's own
+            // fixtures - the tank, the generator, the lights - carry colliders, and on a
+            // second run those are already children of `floor`: measuring first would sweep
+            // last run's fixtures into the "floor" bounds and inflate the zone a little more
+            // on every rebuild. Destroying by name first is also what makes this idempotent
+            // rather than piling up a second tank alongside the first.
+            //
+            // Every matching child, not just Transform.Find's single result - this ran without
+            // the cleanup at all for a few calls earlier in testing, which left more than one
+            // duplicate of each fixture sitting in the scene; Find only ever removes one.
+            var fixtureSet = new System.Collections.Generic.HashSet<string>(FixtureNames);
+            var toDestroy = new System.Collections.Generic.List<GameObject>();
+            foreach (Transform child in floor.transform)
+                if (fixtureSet.Contains(child.name)) toDestroy.Add(child.gameObject);
+            foreach (var go in toDestroy) Object.DestroyImmediate(go);
+
             var bounds = ComputeFloorBounds(floor);
             if (Quaternion.Angle(floor.transform.rotation, Quaternion.identity) > 0.5f)
                 Debug.LogWarning($"[PropertyBuilder] '{floorName}' is rotated - the placement " +
@@ -87,7 +117,7 @@ namespace Game.Editor
                 floor.transform.InverseTransformPoint(cornerWorld),
                 capacityLiters: 60f, startingLiters: 0f, trim);
 
-            Vector3 generatorWorld = cornerWorld + new Vector3(0f, 0f, 0.8f);
+            Vector3 generatorWorld = cornerWorld + new Vector3(0f, 0f, TANK_TO_GENERATOR_GAP);
             var light1 = BuildTestLight(floor.transform,
                 floor.transform.InverseTransformPoint(
                     new Vector3(Mathf.Lerp(bounds.min.x, bounds.max.x, 0.25f),
@@ -133,6 +163,7 @@ namespace Game.Editor
             so.FindProperty("center").vector3Value = Vector3.zero;
             so.FindProperty("size").vector3Value = size;
             so.FindProperty("cellSize").floatValue = CELL_SIZE;
+            so.FindProperty("yawSnapDegrees").floatValue = YAW_SNAP_DEGREES;
             so.FindProperty("outline").objectReferenceValue = outline;
             so.ApplyModifiedPropertiesWithoutUndo();
             return zone.Index;

@@ -156,7 +156,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  GlobalObjectIdHash: 3379707728
+  GlobalObjectIdHash: 1300381694
   InScenePlacedSourceGlobalObjectIdHash: 273457725
   DeferredDespawnTick: 0
   Ownership: 1
@@ -305,4 +305,5 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: cc964b16fd164c94e992085e2b9b819f, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  liters: 20
+  ShowTopMostFoldoutHeaderGroup: 1
+  capacityLiters: 20

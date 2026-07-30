@@ -135,11 +135,12 @@ namespace Game.Editor
             var zone = BuildCargoZone(boat.transform, hull, outlineMaterial);
             BuildCrane(boat.transform, hull, trim, hullPaint);
 
-            // Ship's dedicated tank, tucked against the wheelhouse aft wall clear of the
-            // doorway and the roof ladder on the opposite side. Bigger than the tug's - this
-            // hull is heavier and its engine burns faster.
+            // Ship's dedicated tank, clear of the wheelhouse aft wall (now a full metre deep,
+            // so it needs more clearance than the old small prop did) and the roof ladder on
+            // the opposite side. Bigger than the tug's - this hull is heavier and its engine
+            // burns faster. Y is deck height - FuelTank is base-pivoted.
             var tank = FuelSystemBuilder.BuildFuelTank(boat.transform,
-                new Vector3(1.6f, DECK_TOP + 0.3f, HOUSE_AFT_Z - 0.4f),
+                new Vector3(1.6f, DECK_TOP, HOUSE_AFT_Z - 1.0f),
                 capacityLiters: 140f, startingLiters: 50f, trim);
             var hso = new SerializedObject(helm);
             hso.FindProperty("fuelTank").objectReferenceValue = tank;
@@ -487,6 +488,9 @@ namespace Game.Editor
             // Fine enough to only take the wobble out of a hand-held pose, coarse enough that
             // two crates side by side end up flush.
             so.FindProperty("cellSize").floatValue = 0.2f;
+            // Coarser than furniture's - a crate lashed to a deck cares about square corners
+            // against the hull, not fine facing.
+            so.FindProperty("yawSnapDegrees").floatValue = 30f;
             so.FindProperty("outline").objectReferenceValue = outline;
             so.ApplyModifiedPropertiesWithoutUndo();
             return zone;

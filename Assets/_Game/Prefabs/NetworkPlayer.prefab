@@ -378,6 +378,7 @@ MonoBehaviour:
   maxForce: 50
   rotationSmoothSpeed: 10
   throwForce: 8
+  freeRotateStepDegrees: 45
   heavyMassThreshold: 8
   heavySpeedMultiplier: 0.55
 --- !u!114 &2707463867120099272

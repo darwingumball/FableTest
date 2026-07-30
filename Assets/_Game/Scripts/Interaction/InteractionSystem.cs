@@ -18,6 +18,12 @@ namespace Game.Interaction
     /// everything below eye level. Taking only the first hit meant an item on the deck could
     /// not be picked up while it could still be dragged around by
     /// <see cref="PhysicsPickup"/>, which ignores triggers. Nothing logged; E just did nothing.
+    ///
+    /// The object the player is CURRENTLY CARRYING is skipped the same way. A held barrel or
+    /// couch sits directly in front of the camera, so without this it would be the ray's
+    /// nearest hit and mask off everything the player is actually trying to reach behind or
+    /// around it - the fuel tank you are aiming at over the top of the jerry can you brought
+    /// to fill it, for one.
     /// </summary>
     public class InteractionSystem : MonoBehaviour
     {
@@ -34,12 +40,14 @@ namespace Game.Interaction
         public IInteractable Current { get; private set; }
 
         private NetworkPlayer _player;
+        private PhysicsPickup _pickup;
         private InputAction _interactAction;
         private string _lastPrompt;
 
         private void Awake()
         {
             _player = GetComponentInParent<NetworkPlayer>();
+            _pickup = GetComponentInParent<PhysicsPickup>();
         }
 
         private void Start()
@@ -60,12 +68,18 @@ namespace Game.Interaction
             int count = Physics.RaycastNonAlloc(ray, _hits, interactRange, interactMask,
                 QueryTriggerInteraction.Collide);
 
+            var heldObject = _pickup != null ? _pickup.HeldObject : null;
+
             // RaycastNonAlloc does not sort, so track the nearest match rather than taking the
             // first one that happens to come back.
             float nearest = float.MaxValue;
             for (int i = 0; i < count; i++)
             {
                 if (_hits[i].distance >= nearest) continue;
+
+                // Pass straight through whatever we are carrying - see the class summary.
+                if (heldObject != null && _hits[i].collider.transform.IsChildOf(heldObject.transform))
+                    continue;
 
                 var interactable = _hits[i].collider.GetComponentInParent<IInteractable>();
                 if (interactable == null) continue;

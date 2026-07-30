@@ -560,6 +560,26 @@ MapCamera — prefabs cannot store scene references, so that link lives on the i
     on remote clients, so this is the one place a "fire everywhere" helper is worth building
     rather than special-casing the caller's own peer.
 
+64. **A builder that patches an EXISTING hand-built object, rather than destroying and
+    rebuilding a root it owns outright, has to tear down its own fixtures BEFORE measuring
+    anything, not just before rebuilding.** `PropertyBuilder` computes the placement zone's
+    size from `Apartment Floor`'s own collider bounds - but the fuel tank, generator and two
+    lights it adds are ALSO children of that floor by the time a second run happens, and they
+    carry colliders. Measuring first swept last run's fixtures into "the floor", inflating the
+    zone's height on every single rebuild (0.1 m → 0.9 m → 2.3 m → 3.7 m across four calls) and
+    silently violating the `## Idempotent` claim in the doc comment at the same time - a second
+    run left a SECOND `PlacementZone`/`FuelTank`/`Generator`/light pair sitting right next to
+    the first rather than replacing it, and `CargoAnchor.Index` shifted because it counts every
+    `CargoAnchor` under the host in hierarchy order.
+
+    `WaterBuilder`/`CrabBoatBuilder` never hit this: they destroy the entire boat root by name
+    and rebuild from nothing, so their own fixtures cannot still be there to measure. Any future
+    builder that patches an object it does not fully own needs the same "destroy every matching
+    child BEFORE reading anything off the parent" ordering. **`Transform.Find` only removes ONE
+    match** - if the missing cleanup already let duplicates accumulate (as happened here, from a
+    few calls made before the fix), destroying by name has to walk every child and collect ALL
+    matches first, not stop at the first hit.
+
 58. **Never read a component off a scene you have just closed.** `EditorSceneManager.CloseScene`
     destroys the objects, so a `Debug.Log` at the end of a builder that reports
     `zone.Index` throws `MissingReferenceException` *after* the scene has already been saved
@@ -980,13 +1000,13 @@ and an every-frame shadow map on a moving vessel is exactly the cost that was ju
 of the town.
 
 
-## Fuel system (2026-07-29)
+## Fuel system (2026-07-29, refuelling reworked 2026-07-29)
 
 `FuelContainer` marks a world item as fuel (jerry can 20 L, fuel barrel 100 L — set by
 `ItemsBuilder`, not on `ItemData`, because "how many litres" is a property of the physical
 prefab, not the shared catalog entry). `FuelTank` is a server-authoritative refillable tank
-(one `NetworkVariable<float>`): interact while carrying a `FuelContainer` to pour it in and
-consume the container, interact empty-handed to just read the gauge.
+(one `NetworkVariable<float>`): interact while carrying a `FuelContainer` to start pouring it
+in, interact empty-handed to just read the gauge.
 
 **Consumers never touch litres or containers, only `TryConsume(litersPerSecond, dt)`.** It
 returns whether there was fuel to draw *before* this call — the last tick before empty still
@@ -1011,6 +1031,48 @@ Both boats have their own dedicated tank (tug 90 L cap / 35 L start / 40 L·h⁻
 140 L / 50 L / 55 L·h⁻¹ — heavier hull, faster engine) at a filler cap beside the helm. The
 apartment's tank starts at 0 L specifically so refuelling-then-switching-on is the first thing
 that has to happen, not an afterthought.
+
+### Refuelling takes time, keeps partial fuel, and shows a gauge (2026-07-29)
+
+Three follow-ups from testing, all landing together because they touch the same interaction:
+
+- **Pouring drains at 1 L/s rather than emptying the container instantly.** `FuelTank` now
+  models an active pour as real session state — replicated `NetworkVariable<ulong>
+  _refuelerClientId`, the exact same single-occupant pattern `BoatHelm`'s driver and
+  `CraneController`'s operator already use — validated every server tick rather than only at
+  the start: the container must still be owned by the refueller, still within
+  `MaxRefuelDistance` of the tank, the tank not yet full, the container not yet empty. Any
+  failure ends the session quietly. **Letting go of the container already ends it too, for
+  free** — `PhysicsPickup.Release` hands ownership back to the server, which fails the very
+  next tick's ownership check without any extra plumbing.
+- **`FuelContainer` now tracks a CURRENT level distinct from its nominal capacity.** Pouring a
+  full jerry can into a tank with only 5 L of room used to fill the tank and destroy the can
+  regardless, wasting the other 15 L. `ServerDrain(amount)` only ever removes what it reports
+  taking, so a container that was not fully emptied stays in the world holding the remainder,
+  poured again later. **Known gap, flagged rather than silently left:** this level only
+  survives while the can exists as a WORLD object. Picking it up into the bag despawns the
+  instance and grants a generic `ItemData` stack, which has nowhere to remember a specific
+  can's litres — persisting that through inventory would need per-instance payloads on
+  `ItemStack`, a real inventory feature and out of scope here.
+- **A HUD meter, driven by polling, not an event.** `FuelTank.LocalActive` is a plain static
+  (reset per gotcha 7's domain-reload rule) set directly by whichever peer's own `Interact()`
+  call starts a pour — never replicated, since each peer's own copy only needs to be right for
+  its OWN refueller. `HUDController.Update` just reads `LocalActive.Liters/.Capacity` and
+  `.LocalRefuelSource.Liters/.Capacity` each frame; both are already `Everyone`-readable
+  `NetworkVariable`s, so no new RPC plumbing was needed for numbers that update continuously
+  anyway. `FuelTank._refuelerClientId.OnValueChanged` clears `LocalActive` reactively if the
+  SERVER ends the session (tank filled elsewhere, disconnect) without the local player asking.
+
+**A held item can block the interaction ray to the very thing it's meant to be used on.**
+Carrying a barrel up to a fuel tank put the barrel itself in front of the camera - the nearest
+hit, masking the tank behind it. `InteractionSystem` now skips any collider belonging to
+whatever `PhysicsPickup.HeldObject` currently is, the same "walk past this hit" mechanism
+already used to see through the underwater volume trigger (gotcha 59). General fix, not
+fuel-specific: holding anything no longer blocks reaching whatever is behind or around it.
+
+**Both props are now full-size fixtures (~1×1×1.8 m tank, ~1×0.8×1.4 m generator) and
+BASE-PIVOTED** — `localPosition` is where they stand, not their centre — specifically so a
+caller placing one at deck/floor height does not have to compute half its own height first.
 
 
 ## Home / property system, first pass (2026-07-29)
@@ -1041,6 +1103,23 @@ multi-box couch measures and places correctly with no changes there. First two p
 the "manually placed property outline... transparent green walls near the fence border" from
 the original spec — that is a different visual (vertical walls marking a plot boundary) from
 the floor's own placement-region outline built here, which is a low border on the floor itself.
+
+### Per-zone yaw snap, and R to rotate by hand (2026-07-29)
+
+`PlacementZone.yawSnapDegrees` replaces the hardcoded 90° quarter-turn snap. A deck lashing
+area cares about square corners against the hull (30°); furniture wants to face into a room at
+an angle without being locked to the cardinal four (15°, the property zone's setting). The
+snap math itself did not need to change — `Mathf.Round(angle / increment) * increment` already
+generalises past 90 — only the literal needed to become a field.
+
+`PhysicsPickup` gained a manual yaw offset, `R` to add one increment on top of the camera-facing
+hold rotation. **The increment is read from whatever zone the held item is CURRENTLY over,
+queried fresh at the moment of the press** (`PlacementZone.Find`, not a cached value) rather
+than a single fixed step — because `Plan()` re-snaps to the zone's own grid regardless of what
+is fed in, stepping by any OTHER increment would make most presses of R invisible (the plan
+would snap right back over them). Reading the live zone is what makes every press move the
+ghost to the next legal facing. Away from any zone (nothing to snap to) it falls back to a
+fixed 45°, purely cosmetic there.
 
 
 ## Admin console

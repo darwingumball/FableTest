@@ -36,10 +36,18 @@ namespace Game.World
         [Header("Snapping")]
         [Tooltip("Grid the footprint centre snaps to. 0 for free placement.\n\n" +
                  "Small values only take the jitter out of a hand-held pose; large ones make " +
-                 "cargo tile. Yaw is always snapped to 90 degrees regardless - cargo lashed " +
-                 "askew on a deck reads as a mistake, and a square footprint makes the " +
-                 "overlap test exact instead of conservative.")]
+                 "cargo tile.")]
         [SerializeField, Min(0f)] private float cellSize = 0.25f;
+
+        [Tooltip("Yaw always snaps to a multiple of this, relative to the zone's own heading - " +
+                 "never free. Cargo lashed askew reads as a mistake, and a snapped footprint " +
+                 "makes the overlap test exact instead of conservative.\n\n" +
+                 "A deck lashing a crate cares about square corners (90 keeps the overlap test " +
+                 "exact); furniture wants to face a room at an angle without being locked to " +
+                 "the cardinal four, so a property's zone uses something finer.")]
+        [SerializeField, Range(1f, 90f)] private float yawSnapDegrees = 90f;
+
+        public float YawSnapDegrees => yawSnapDegrees;
 
         [Tooltip("What blocks a placement and what cargo may rest on. Leave as everything " +
                  "unless props start refusing to sit on their own deck.")]
@@ -108,10 +116,10 @@ namespace Game.World
             Bounds own = CargoBounds.InOwnFrame(cargo);
             Quaternion frame = AttachRoot.rotation;
 
-            // Yaw to the nearest quarter turn WITHIN the attach root's frame, so cargo ends up
-            // square to the deck rather than square to the world.
+            // Yaw to the nearest snap increment WITHIN the attach root's frame, so cargo ends
+            // up square to the deck (or the room) rather than square to the world.
             Quaternion desiredLocalRotation = Quaternion.Inverse(frame) * desiredRotation;
-            float snapped = Mathf.Round(desiredLocalRotation.eulerAngles.y / 90f) * 90f;
+            float snapped = Mathf.Round(desiredLocalRotation.eulerAngles.y / yawSnapDegrees) * yawSnapDegrees;
             Quaternion relative = Quaternion.Euler(0f, snapped, 0f);
             worldRotation = frame * relative;
 
