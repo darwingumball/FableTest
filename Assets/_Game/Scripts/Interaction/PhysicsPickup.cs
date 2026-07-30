@@ -38,6 +38,10 @@ namespace Game.Interaction
         [SerializeField, Range(0.2f, 1f)] private float heavySpeedMultiplier = 0.55f;
 
         public bool IsHolding => _heldBody != null;
+        /// <summary>What is currently being carried, or null. Read by anything that cares
+        /// what a player is holding without owning the carry itself - e.g. FuelTank checking
+        /// for a jerry can.</summary>
+        public GameObject HeldObject => _heldBody != null ? _heldBody.gameObject : null;
 
         private Camera _camera;
         private NetworkPlayer _player;

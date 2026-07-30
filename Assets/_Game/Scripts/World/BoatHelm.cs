@@ -61,6 +61,17 @@ namespace Game.World
                  "like a boat rather than a car.")]
         [SerializeField] private float rudderAuthoritySpeed = 4f;
 
+        [Header("Fuel")]
+        [Tooltip("Optional. An empty tank does not stop the boat outright - it stops the " +
+                 "THROTTLE, so a boat under way coasts to a halt on drag alone rather than " +
+                 "slamming to a stop, and steering still answers for as long as there is way " +
+                 "on. Leave unassigned for a boat that should never need fuel.")]
+        [SerializeField] private FuelTank fuelTank;
+        [Tooltip("Burn while the throttle is engaged, scaled by how far it is pushed. A ship " +
+                 "engine burns faster than a stationary generator - it is moving several " +
+                 "tonnes of hull, not just turning a lamp on.")]
+        [SerializeField] private float fuelBurnLitersPerHour = 30f;
+
         [Header("Bounds")]
         [Tooltip("Centre of the navigable water, world XZ.")]
         [SerializeField] private Vector2 boundsCentre = new(0f, 620f);
@@ -230,9 +241,20 @@ namespace Game.World
 
         private void ServerIntegrate(float dt)
         {
-            float target = _throttleInput >= 0f
-                ? _throttleInput * maxSpeed
-                : _throttleInput * maxReverseSpeed;
+            // Only draws down while the throttle is actually engaged - idling at the helm or
+            // drifting with the wheel centred costs nothing, which is what makes "no fuel"
+            // mean "cannot power the engine" rather than "cannot exist near the helm".
+            float throttle = _throttleInput;
+            if (fuelTank != null && Mathf.Abs(throttle) > 0.01f)
+            {
+                bool hasFuel = fuelTank.TryConsume(
+                    fuelBurnLitersPerHour / 3600f * Mathf.Abs(throttle), dt);
+                if (!hasFuel) throttle = 0f;
+            }
+
+            float target = throttle >= 0f
+                ? throttle * maxSpeed
+                : throttle * maxReverseSpeed;
 
             var nav = _nav.Value;
             float speed = nav.Speed;
@@ -241,7 +263,10 @@ namespace Game.World
             // driving the prop ahead, driving it astern, and simply losing way to drag.
             // Coasting is much the slowest, which is what makes stopping something you have
             // to plan for rather than something you do.
-            float rate = Mathf.Abs(_throttleInput) <= 0.01f ? dragDeceleration
+            // Gated throttle, not the raw input: out of fuel this reads as centred and the
+            // boat coasts down on drag, rather than "accelerating" hard toward a target of
+            // zero because the player is still holding the key down.
+            float rate = Mathf.Abs(throttle) <= 0.01f ? dragDeceleration
                        : target < speed - 0.01f && target < 0f ? reverseAcceleration
                        : acceleration;
             speed = Mathf.MoveTowards(speed, target, rate * dt);

@@ -10,21 +10,17 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 7922c4748938266479e17286a2750deb, type: 3}
-  m_Name: fuel_barrel
+  m_Name: chair
   m_EditorClassIdentifier: 
-  itemId: fuel_barrel
-  displayName: Fuel Barrel
-  description: Half full. Sloshes ominously when carried.
-  statsText: 'Heavy - slows you down
-
-    Flammable
-
-    Fuel: 100 L'
-  gridWidth: 2
-  gridHeight: 2
+  itemId: chair
+  displayName: Chair
+  description: Four legs, a back, and no cushion whatsoever.
+  statsText: Furniture
+  gridWidth: 1
+  gridHeight: 1
   maxStack: 1
-  weightKg: 20
+  weightKg: 6
   icon: {fileID: 0}
-  iconTint: {r: 0.55, g: 0.16, b: 0.13, a: 1}
-  worldPrefab: {fileID: 3819830513477836824, guid: 6c36a1cb1d50dfb498e6cb7adb21fcce, type: 3}
+  iconTint: {r: 0.36, g: 0.26, b: 0.16, a: 1}
+  worldPrefab: {fileID: 7503174419851767251, guid: 70369bca2fc65a14ab103803dc0617a9, type: 3}
   previewPrefab: {fileID: 0}

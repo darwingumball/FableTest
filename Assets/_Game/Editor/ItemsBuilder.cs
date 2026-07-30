@@ -38,6 +38,15 @@ namespace Game.Editor
             public Vector3 scale;
             /// <summary>Gets a <see cref="Buoyancy"/>. A wrench does not.</summary>
             public bool floats;
+            /// <summary>Litres if this is a fuel container (jerry can, barrel). 0 = not fuel.</summary>
+            public float fuelLiters;
+            /// <summary>
+            /// Composite items (furniture) build their own child geometry instead of a single
+            /// scaled primitive - a couch scaled up from one box has no backrest, it is just a
+            /// bigger box. Receives the root's transform to parent under and the item's shared
+            /// material. Leave null for an ordinary single-primitive item.
+            /// </summary>
+            public System.Action<Transform, Material> buildGeometry;
         }
 
         private static readonly ItemDef[] Defs =
@@ -53,17 +62,17 @@ namespace Game.Editor
                     stats = "Tool", w = 2, h = 1, stack = 1, mass = 2f,
                     color = new Color(0.55f, 0.55f, 0.58f), primitive = PrimitiveType.Capsule, scale = new Vector3(0.08f, 0.22f, 0.08f) },
             new() { id = "fuel_barrel", name = "Fuel Barrel", desc = "Half full. Sloshes ominously when carried.",
-                    stats = "Heavy - slows you down\nFlammable", w = 2, h = 2, stack = 1, mass = 20f,
+                    stats = "Heavy - slows you down\nFlammable\nFuel: 100 L", w = 2, h = 2, stack = 1, mass = 20f,
                     color = new Color(0.55f, 0.16f, 0.13f), primitive = PrimitiveType.Cylinder, scale = new Vector3(0.4f, 0.3f, 0.4f),
-                    floats = true },
+                    floats = true, fuelLiters = 100f },
             // The small fuel container, alongside the barrel. Sealed, so it floats - dropping
             // one over the side should be a recoverable mistake rather than a lost tank of
-            // diesel. The fuel SYSTEM (generators, ship tanks, consumption) is not built yet;
-            // this is the item it will consume.
+            // diesel. Pour it into a FuelTank (a ship's engine, a property's generator) by
+            // carrying it and interacting with the tank.
             new() { id = "jerry_can", name = "Jerry Can", desc = "Twenty litres of diesel and a bent spout.",
                     stats = "Fuel: 20 L\nFlammable", w = 2, h = 2, stack = 1, mass = 18f,
                     color = new Color(0.24f, 0.30f, 0.20f), primitive = PrimitiveType.Cube, scale = new Vector3(0.19f, 0.46f, 0.34f),
-                    floats = true },
+                    floats = true, fuelLiters = 20f },
             // Deliberately the biggest thing in the list. The crane needs a load that reads as
             // a load from the wheelhouse roof twenty metres away, and a 40 cm crate does not -
             // a pot you can see swinging is the whole point of watching a crane work.
@@ -71,7 +80,39 @@ namespace Game.Editor
                     stats = "Bulky - crane or two hands\nFloats, just about", w = 3, h = 3, stack = 1, mass = 34f,
                     color = new Color(0.28f, 0.30f, 0.26f), primitive = PrimitiveType.Cube, scale = new Vector3(0.95f, 0.6f, 0.95f),
                     floats = true },
+            // First two furniture pieces for the Home system. Not floats: indoor furniture
+            // dropped in the water is expected to just sink, same as a real couch would.
+            new() { id = "couch", name = "Couch", desc = "Two-seater. The cushions have seen things.",
+                    stats = "Heavy - slows you down\nFurniture", w = 3, h = 2, stack = 1, mass = 30f,
+                    color = new Color(0.32f, 0.27f, 0.24f), buildGeometry = BuildCouch },
+            new() { id = "chair", name = "Chair", desc = "Four legs, a back, and no cushion whatsoever.",
+                    stats = "Furniture", w = 1, h = 1, stack = 1, mass = 6f,
+                    color = new Color(0.36f, 0.26f, 0.16f), buildGeometry = BuildChair },
         };
+
+        private static void BuildCouch(Transform root, Material mat)
+        {
+            TestMaterials.Box("Seat", root, new Vector3(0f, 0.22f, 0.05f),
+                new Vector3(1.6f, 0.36f, 0.62f), mat);
+            TestMaterials.Box("Back", root, new Vector3(0f, 0.55f, -0.30f),
+                new Vector3(1.6f, 0.5f, 0.14f), mat);
+            foreach (int side in new[] { -1, 1 })
+                TestMaterials.Box($"Arm_{side}", root, new Vector3(side * 0.79f, 0.42f, -0.02f),
+                    new Vector3(0.14f, 0.3f, 0.66f), mat);
+        }
+
+        private static void BuildChair(Transform root, Material mat)
+        {
+            TestMaterials.Box("Seat", root, new Vector3(0f, 0.42f, 0.02f),
+                new Vector3(0.46f, 0.06f, 0.46f), mat);
+            TestMaterials.Box("Back", root, new Vector3(0f, 0.68f, -0.20f),
+                new Vector3(0.46f, 0.5f, 0.06f), mat);
+            foreach (int x in new[] { -1, 1 })
+                foreach (int z in new[] { -1, 1 })
+                    TestMaterials.Box($"Leg_{x}_{z}", root,
+                        new Vector3(x * 0.19f, 0.195f, z * 0.19f),
+                        new Vector3(0.05f, 0.39f, 0.05f), mat);
+        }
 
         [MenuItem("Game/Setup/Build Items")]
         public static void Build()
@@ -125,19 +166,34 @@ namespace Game.Editor
             // 3. World prefab.
             string prefabPath = $"{ITEM_PREFAB_FOLDER}/{def.id}.prefab";
             var existing = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            bool composite = def.buildGeometry != null;
             GameObject root;
             if (existing != null)
             {
                 root = (GameObject)PrefabUtility.InstantiatePrefab(existing);
                 PrefabUtility.UnpackPrefabInstance(root, PrefabUnpackMode.Completely, InteractionMode.AutomatedAction);
+                // A composite item rebuilds its geometry from scratch every run, or a second
+                // Build Items would leave last run's boxes sitting behind this run's.
+                if (composite)
+                    foreach (Transform child in new System.Collections.Generic.List<Transform>(
+                                 System.Linq.Enumerable.Cast<Transform>(root.transform)))
+                        Object.DestroyImmediate(child.gameObject);
             }
             else
             {
-                root = GameObject.CreatePrimitive(def.primitive);
-                root.name = def.id;
+                root = composite ? new GameObject(def.id) : GameObject.CreatePrimitive(def.primitive);
             }
-            root.transform.localScale = def.scale;
-            root.GetComponent<Renderer>().sharedMaterial = mat;
+            root.name = def.id;
+
+            if (composite)
+            {
+                def.buildGeometry(root.transform, mat);
+            }
+            else
+            {
+                root.transform.localScale = def.scale;
+                root.GetComponent<Renderer>().sharedMaterial = mat;
+            }
 
             var rb = Ensure<Rigidbody>(root);
             rb.mass = def.mass;
@@ -168,6 +224,19 @@ namespace Game.Editor
             else
             {
                 var stray = root.GetComponent<Buoyancy>();
+                if (stray != null) Object.DestroyImmediate(stray);
+            }
+
+            if (def.fuelLiters > 0f)
+            {
+                var container = Ensure<FuelContainer>(root);
+                var cso = new SerializedObject(container);
+                cso.FindProperty("liters").floatValue = def.fuelLiters;
+                cso.ApplyModifiedPropertiesWithoutUndo();
+            }
+            else
+            {
+                var stray = root.GetComponent<FuelContainer>();
                 if (stray != null) Object.DestroyImmediate(stray);
             }
 
@@ -225,6 +294,12 @@ namespace Game.Editor
                 new WorldItemManager.ScatterEntry { itemId = "crate_small", count = 1, position = new Vector3(17f, -2.4f, 84f) },
                 new WorldItemManager.ScatterEntry { itemId = "fuel_barrel", count = 1, position = new Vector3(6f, -2.4f, 85f) },
                 new WorldItemManager.ScatterEntry { itemId = "jerry_can", count = 1, position = new Vector3(3.9f, 0.5f, 2.2f) },
+
+                // Loose in the apartment's second room (world ~(-9.59, y, 22.59)), so there is
+                // something to test the floor's PlacementZone with immediately - see
+                // PropertyBuilder.
+                new WorldItemManager.ScatterEntry { itemId = "couch", count = 1, position = new Vector3(-9.5f, 0.3f, 22.5f) },
+                new WorldItemManager.ScatterEntry { itemId = "chair", count = 1, position = new Vector3(-8.0f, 0.3f, 21.3f) },
             };
 
             EditorSceneManager.MarkSceneDirty(scene);

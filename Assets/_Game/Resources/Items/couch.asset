@@ -10,21 +10,19 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 7922c4748938266479e17286a2750deb, type: 3}
-  m_Name: fuel_barrel
+  m_Name: couch
   m_EditorClassIdentifier: 
-  itemId: fuel_barrel
-  displayName: Fuel Barrel
-  description: Half full. Sloshes ominously when carried.
+  itemId: couch
+  displayName: Couch
+  description: Two-seater. The cushions have seen things.
   statsText: 'Heavy - slows you down
 
-    Flammable
-
-    Fuel: 100 L'
-  gridWidth: 2
+    Furniture'
+  gridWidth: 3
   gridHeight: 2
   maxStack: 1
-  weightKg: 20
+  weightKg: 30
   icon: {fileID: 0}
-  iconTint: {r: 0.55, g: 0.16, b: 0.13, a: 1}
-  worldPrefab: {fileID: 3819830513477836824, guid: 6c36a1cb1d50dfb498e6cb7adb21fcce, type: 3}
+  iconTint: {r: 0.32, g: 0.27, b: 0.24, a: 1}
+  worldPrefab: {fileID: 1943602186168007976, guid: 707a5f826b128374ab6176226d1cc274, type: 3}
   previewPrefab: {fileID: 0}

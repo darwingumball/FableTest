@@ -419,7 +419,8 @@ namespace Game.Admin
             "  speed <multiplier>                     1 = normal\n" +
             "  heal\n" +
             "  give <itemId> [count]                  crate_small|ration_can|wrench_large|\n" +
-            "                                         fuel_barrel|crab_trap\n" +
+            "                                         fuel_barrel|jerry_can|crab_trap|\n" +
+            "                                         couch|chair\n" +
             "Session:\n" +
             "  quest <accept|complete> <questId>\n" +
             "  players\n" +

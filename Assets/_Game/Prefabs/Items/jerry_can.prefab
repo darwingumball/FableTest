@@ -20,6 +20,7 @@ GameObject:
   - component: {fileID: 1948205541921188568}
   - component: {fileID: 7576420048728891045}
   - component: {fileID: 6462604536155277138}
+  - component: {fileID: 3241152299016327891}
   m_Layer: 0
   m_Name: jerry_can
   m_TagString: Untagged
@@ -155,8 +156,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  GlobalObjectIdHash: 2168998072
-  InScenePlacedSourceGlobalObjectIdHash: 0
+  GlobalObjectIdHash: 3379707728
+  InScenePlacedSourceGlobalObjectIdHash: 273457725
   DeferredDespawnTick: 0
   Ownership: 1
   AlwaysReplicateAsRoot: 0
@@ -292,3 +293,16 @@ MonoBehaviour:
   submersionRamp: 0.6
   waterDrag: 2.5
   waterAngularDrag: 1.5
+--- !u!114 &3241152299016327891
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2927271491601602817}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: cc964b16fd164c94e992085e2b9b819f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  liters: 20

@@ -537,6 +537,29 @@ MapCamera — prefabs cannot store scene references, so that link lives on the i
     the grab actually worked. A bare block swings 3.7× further than a loaded one on the same slew
     (23.8° against 6.5°, 5 m rope, 4 m/s² for 1.5 s).
 
+62. **Correcting a body's LINEAR velocity toward a moving surface's is not enough to keep it
+    from tumbling — its ANGULAR velocity needs the same correction.** `DeckCargoCarry` originally
+    only eased loose cargo's travel toward the deck's own velocity (gotcha 61's sibling problem:
+    a kinematic collider that teleports pushes nothing). That fixed the net drift, but a crate
+    was still free to pick up spin from every ordinary contact as the deck accelerated under it,
+    and an object that keeps accumulating spin eventually tumbles end over end — reported back
+    as "rolls over and over to the back, but slower". The fix eases `angularVelocity` toward the
+    deck's own yaw rate (`omega`, from `BoatMotion.LastFrameYawDelta`) the same way the linear
+    term eases toward the deck's travel, at a MUCH stronger rate (`angularGrip` 14 vs `grip` 6) —
+    the difference between a crate that slides and one that rolls away. 95% of any spin decays
+    in 0.21 s, fast enough to stop visible tumbling while still letting a deliberate shove wobble
+    briefly before it settles.
+
+63. **`GameEventBus` is a per-process static — firing it on the server only satisfies the
+    SERVER's own quest flags.** Every other place in the codebase that fires a shared-consequence
+    event does so from inside a `ClientRpc` (`WorldItemNetworkSync.GrantItemClientRpc`), which is
+    easy to miss as the reason if you're only looking at `GameEventBus.Fire` itself — the bus has
+    no concept of "network" at all, it is one `Action<string>` per peer. `Generator` broadcasts
+    its `generator_powered:<id>` / `generator_stopped:<id>` events through a `FixedString128Bytes`
+    `ClientRpc` for exactly this reason: NGO invokes a `ClientRpc` locally on the host as well as
+    on remote clients, so this is the one place a "fire everywhere" helper is worth building
+    rather than special-casing the caller's own peer.
+
 58. **Never read a component off a scene you have just closed.** `EditorSceneManager.CloseScene`
     destroys the objects, so a `Debug.Log` at the end of a builder that reports
     `zone.Index` throws `MissingReferenceException` *after* the scene has already been saved
@@ -955,6 +978,69 @@ Deck lights are **point lights, not shadowed spots**, on purpose: the cached sha
 everything ashore now uses would bake this boat's shadows at the mooring and leave them there,
 and an every-frame shadow map on a moving vessel is exactly the cost that was just taken out
 of the town.
+
+
+## Fuel system (2026-07-29)
+
+`FuelContainer` marks a world item as fuel (jerry can 20 L, fuel barrel 100 L — set by
+`ItemsBuilder`, not on `ItemData`, because "how many litres" is a property of the physical
+prefab, not the shared catalog entry). `FuelTank` is a server-authoritative refillable tank
+(one `NetworkVariable<float>`): interact while carrying a `FuelContainer` to pour it in and
+consume the container, interact empty-handed to just read the gauge.
+
+**Consumers never touch litres or containers, only `TryConsume(litersPerSecond, dt)`.** It
+returns whether there was fuel to draw *before* this call — the last tick before empty still
+returns true (no visible stutter exactly at zero), and the very next call reports false, which
+is the caller's shutdown signal. Both current consumers use it the same way:
+
+- **`BoatHelm`** gates the THROTTLE, not the boat. Out of fuel, the helm's own `throttle`
+  variable (not the raw input) drops to zero for the rate calculation too — using the raw
+  input there would have picked the acceleration-toward-zero rate instead of drag, so an empty
+  tank would have "decelerated hard" rather than genuinely coasting. Steering still answers for
+  as long as there is way on, because rudder authority is already tied to actual speed.
+- **`Generator`** refuses to start at all with an empty tank, and shuts itself off the instant
+  `TryConsume` reports false.
+
+**`Generator` firing its own events is the one place a "broadcast to every peer" helper earns
+its keep** — see gotcha 63. `GameEventBus` is a bare per-process static; a generator switching
+on is shared world state, so `generator_powered:<id>` / `generator_stopped:<id>` go out through
+a `ClientRpc` rather than a local `GameEventBus.Fire`, and every peer (host included) applies
+`poweredObjects` from the replicated `running` flag rather than from the RPC itself.
+
+Both boats have their own dedicated tank (tug 90 L cap / 35 L start / 40 L·h⁻¹ burn; crabber
+140 L / 50 L / 55 L·h⁻¹ — heavier hull, faster engine) at a filler cap beside the helm. The
+apartment's tank starts at 0 L specifically so refuelling-then-switching-on is the first thing
+that has to happen, not an afterthought.
+
+
+## Home / property system, first pass (2026-07-29)
+
+The placement foundation built for the boats (`CargoAnchor`, `PlacementZone`,
+`CargoAttachment`, the green/red ghost) turned out to need nothing boat-specific added for a
+building: `PropertyBuilder` wires a `PlacementZone` onto "Apartment Floor" — geometry Evan
+built by hand, three ProBuilder slabs — by reading its **collider bounds at build time** rather
+than hardcoding numbers, so editing the floor and re-running `Build Property` re-fits the zone
+automatically. The same method takes a floor name, so the next property is a one-line call.
+
+The floor's three slabs form an L/dumbbell shape with two notches inside the overall bounding
+box. The zone still just uses the bounding rectangle — this is deliberately NOT a problem,
+because `PlacementZone.Plan`'s support-height sweep already requires a real collider to rest
+on; a placement attempted over one of the notches simply finds no floor and comes back red.
+Shape-correctness falls out of the physics check for free, so there was no reason to build a
+multi-region zone.
+
+**`ItemsBuilder` gained composite geometry** for furniture. Every existing item is one
+primitive scaled up, which is fine for a crate but gives a couch no backrest — just a bigger
+box. `ItemDef.buildGeometry` (an `Action<Transform, Material>`) lets an item build several
+child boxes instead; `CargoBounds` already walks every collider under an object's root, so a
+multi-box couch measures and places correctly with no changes there. First two pieces: **couch**
+(seat + back + two arms, w3×h2, mass 30 — heavy enough to trip the carry speed penalty) and
+**chair** (seat + back + four legs, w1×h1, mass 6).
+
+**Not built yet, and worth flagging before it's assumed done:** buying/owning properties, and
+the "manually placed property outline... transparent green walls near the fence border" from
+the original spec — that is a different visual (vertical walls marking a plot boundary) from
+the floor's own placement-region outline built here, which is a low border on the floor itself.
 
 
 ## Admin console

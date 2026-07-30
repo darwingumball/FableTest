@@ -642,6 +642,16 @@ namespace Game.Editor
             BuildLadder(boat.transform, trim);
             BuildHold(boat.transform, hull, hullPaint, deck, trim);
 
+            // Ship's dedicated tank, beside the wheel where a driver refuelling at port can
+            // reach it without leaving the helm. Started well shy of full so running dry is
+            // something a play session can actually reach.
+            var tank = FuelSystemBuilder.BuildFuelTank(boat.transform,
+                new Vector3(1.1f, 1.0f, -1.75f), capacityLiters: 90f, startingLiters: 35f, trim);
+            var hso = new SerializedObject(helm);
+            hso.FindProperty("fuelTank").objectReferenceValue = tank;
+            hso.FindProperty("fuelBurnLitersPerHour").floatValue = 40f;
+            hso.ApplyModifiedPropertiesWithoutUndo();
+
             // Wake. Both hang off the LEVEL root, so they stay square to the water while
             // the hull rolls - a decal is projected straight down, and letting it roll with
             // the visual would swing the wake out from under the boat.
@@ -731,6 +741,7 @@ namespace Game.Editor
             dso.FindProperty("deckCenter").vector3Value = new Vector3(0f, 0.4f, 0f);
             dso.FindProperty("deckSize").vector3Value = new Vector3(5.4f, 6.8f, 14.4f);
             dso.FindProperty("grip").floatValue = 6f;
+            dso.FindProperty("angularGrip").floatValue = 14f;
             dso.ApplyModifiedPropertiesWithoutUndo();
         }
 

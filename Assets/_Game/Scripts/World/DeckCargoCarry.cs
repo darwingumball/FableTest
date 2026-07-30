@@ -26,6 +26,14 @@ namespace Game.World
     /// <see cref="Buoyancy"/>, and a crate that could not fall would be worse than one that
     /// slides.
     ///
+    /// ANGULAR velocity is corrected the same way, toward the deck's own spin (yaw only - the
+    /// deck collider itself never rolls or pitches, only heaves and yaws; see BoatMotion). Just
+    /// correcting the linear component left a crate matching the deck's TRAVEL but still free
+    /// to pick up its own spin from every contact - which is what "slides, but keeps rolling
+    /// over and over" actually was: not a translation bug, a rotation one. A resting box that
+    /// is never allowed to accumulate spin cannot tumble, however hard the deck accelerates
+    /// under it.
+    ///
     /// Owner-only, like <see cref="Buoyancy"/>: world items are owner-authoritative, so every
     /// peer writing velocities would fight the transform sync.
     /// </summary>
@@ -38,11 +46,19 @@ namespace Game.World
         [SerializeField] private Vector3 deckSize = new(6.2f, 9f, 19f);
 
         [Header("Grip")]
-        [Tooltip("How fast a loose body is pulled onto the deck's own velocity, per second.\n\n" +
-                 "This is the whole feel knob. High is a crate bolted down; low is a crate on " +
+        [Tooltip("How fast a loose body's TRAVEL is pulled onto the deck's own velocity, per " +
+                 "second.\n\n" +
+                 "This is the main feel knob. High is a crate bolted down; low is a crate on " +
                  "ice. Around 6 leaves things sliding a little under acceleration and in a " +
                  "turn, then settling - which is what cargo on a wet steel deck actually does.")]
         [SerializeField] private float grip = 6f;
+
+        [Tooltip("How fast a loose body's SPIN is pulled onto the deck's own yaw rate, per " +
+                 "second. Deliberately much stronger than the travel grip: a box that is free " +
+                 "to accumulate spin from ordinary contacts tumbles end over end across the " +
+                 "whole deck, which reads as broken however slowly it happens. This is the " +
+                 "difference between a crate that slides and one that rolls away.")]
+        [SerializeField] private float angularGrip = 14f;
 
         [Tooltip("Ignore the deck velocity if it exceeds this. A hull that teleports - a boat " +
                  "respawning, the mooring settling on its first frame - would otherwise fire " +
@@ -95,6 +111,7 @@ namespace Game.World
                 transform.rotation, cargoMask, QueryTriggerInteraction.Ignore);
 
             float pull = 1f - Mathf.Exp(-grip * dt);
+            float spinPull = 1f - Mathf.Exp(-angularGrip * dt);
             _seen.Clear();
 
             for (int i = 0; i < count; i++)
@@ -120,6 +137,12 @@ namespace Game.World
                 Vector3 relative = body.linearVelocity - deckVelocity;
                 relative.y = 0f;
                 body.linearVelocity -= relative * pull;
+
+                // The box's own spin, pulled toward the deck's yaw rate rather than toward
+                // zero - a body already turning WITH the boat (riding a hard turn) should not
+                // be fought, only spin relative to the deck should be cancelled.
+                Vector3 relativeSpin = body.angularVelocity - omega;
+                body.angularVelocity -= relativeSpin * spinPull;
             }
         }
 

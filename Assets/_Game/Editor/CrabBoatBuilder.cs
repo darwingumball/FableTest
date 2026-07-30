@@ -135,6 +135,17 @@ namespace Game.Editor
             var zone = BuildCargoZone(boat.transform, hull, outlineMaterial);
             BuildCrane(boat.transform, hull, trim, hullPaint);
 
+            // Ship's dedicated tank, tucked against the wheelhouse aft wall clear of the
+            // doorway and the roof ladder on the opposite side. Bigger than the tug's - this
+            // hull is heavier and its engine burns faster.
+            var tank = FuelSystemBuilder.BuildFuelTank(boat.transform,
+                new Vector3(1.6f, DECK_TOP + 0.3f, HOUSE_AFT_Z - 0.4f),
+                capacityLiters: 140f, startingLiters: 50f, trim);
+            var hso = new SerializedObject(helm);
+            hso.FindProperty("fuelTank").objectReferenceValue = tank;
+            hso.FindProperty("fuelBurnLitersPerHour").floatValue = 55f;
+            hso.ApplyModifiedPropertiesWithoutUndo();
+
             BuildMotion(boat, hull, helm);
             BuildWake(boat);
 
@@ -655,6 +666,7 @@ namespace Game.Editor
             dso.FindProperty("deckCenter").vector3Value = new Vector3(0f, 1.6f, -0.5f);
             dso.FindProperty("deckSize").vector3Value = new Vector3(6.2f, 9f, 19f);
             dso.FindProperty("grip").floatValue = 6f;
+            dso.FindProperty("angularGrip").floatValue = 14f;
             dso.ApplyModifiedPropertiesWithoutUndo();
         }
 
