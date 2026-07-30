@@ -6,15 +6,25 @@ using UnityEngine;
 namespace Game.World
 {
     /// <summary>
-    /// A refillable tank: a ship's engine, or a property's generator. Interact while carrying
-    /// a <see cref="FuelContainer"/> (a jerry can, a fuel barrel) to start pouring it in;
-    /// interact again - or walk the container away, or let go of it - to stop. Interact while
-    /// carrying nothing just reads the gauge.
+    /// A refillable tank: a ship's engine, or a property's generator. HOLD Interact while
+    /// carrying a <see cref="FuelContainer"/> (a jerry can, a fuel barrel) to pour it in;
+    /// release - or look away, or walk out of range, or let go of the container - to stop.
+    /// Tap Interact while carrying nothing just reads the gauge.
     ///
     /// POURING TAKES TIME, at <see cref="RefuelLitersPerSecond"/>, rather than emptying the can
     /// the instant E is pressed. That is what makes "in the middle of a transfer" a real state
     /// worth showing a gauge for, and it is also what makes the exclusivity below matter - two
     /// players cannot both be pouring into the same nozzle at once.
+    ///
+    /// THIS IS <see cref="IHoldInteractable"/>, DELIBERATELY, NOT A TOGGLE. An earlier version
+    /// was press-to-start/press-to-stop, kept open by a per-tick server check that the
+    /// container's WORLD POSITION stayed within a metre or so of the tank - and that distance
+    /// check was the bug: a can held via physics-carry drifts around its spring target by more
+    /// than that routinely, so the session flickered off (and had to get "lucky" to stay open)
+    /// for reasons that had nothing to do with the player's actual intent. Driving the pour
+    /// from "is the button down and the tank still under the crosshair" - which
+    /// <c>InteractionSystem</c> already tracks precisely, once, in one place - removes the
+    /// need for that distance check (and its flicker) entirely; see PROGRESS.md.
     ///
     /// Server-authoritative, like every other shared resource here: the level is one
     /// `NetworkVariable&lt;float&gt;`, written only by the server, so every peer agrees on how
@@ -29,15 +39,10 @@ namespace Game.World
     /// litres, containers, or refuelling; they just get told yes or no.
     /// </summary>
     [RequireComponent(typeof(NetworkObject))]
-    public class FuelTank : NetworkBehaviour, IInteractable
+    public class FuelTank : NetworkBehaviour, IHoldInteractable
     {
         private const ulong NoRefueler = ulong.MaxValue;
         private const float RefuelLitersPerSecond = 1f;
-        // The container has to stay roughly where it was when pouring started - a nozzle
-        // inserted, not a can waved in the general direction of the tank. Physics-carry keeps
-        // a held item pinned near the camera, so this only ever trips if the player actually
-        // walks away or lets go.
-        private const float MaxRefuelDistance = 1.6f;
 
         [SerializeField] private float capacityLiters = 100f;
         [Tooltip("What the tank holds when the scene starts. Not the capacity - most tanks " +
@@ -54,7 +59,10 @@ namespace Game.World
         private FuelContainer _serverContainer;
         private NetworkObject _serverContainerObject;
 
-        private int _lastToggleFrame = -1;
+        // Local-only: whether THIS peer has already sent its start request for the CURRENT
+        // hold, so InteractHeld sends at most one RPC per press rather than one every frame -
+        // the server session, once started, persists on its own until an explicit stop.
+        private bool _startRequestedThisHold;
 
         public float Liters => _liters.Value;
         public float Capacity => capacityLiters;
@@ -137,7 +145,7 @@ namespace Game.World
             if (!IsSpawned || NetworkManager == null) return null;
             ulong localId = NetworkManager.LocalClientId;
 
-            if (_refuelerClientId.Value == localId) return "Stop refuelling";
+            if (_refuelerClientId.Value == localId) return "Refuelling...";
             if (_refuelerClientId.Value != NoRefueler) return "Fuel tank: refuelling (in use)";
 
             var container = HeldContainer(player);
@@ -145,37 +153,37 @@ namespace Game.World
             {
                 if (_liters.Value >= capacityLiters - 0.01f)
                     return $"Fuel tank full ({_liters.Value:0}/{capacityLiters:0} L)";
-                return $"Refuel with {Label(container)} ({container.Liters:0.0} L available)";
+                return $"Hold to refuel with {Label(container)} ({container.Liters:0.0} L)";
             }
 
-            // Nothing to pour in - just read the gauge. Interact() is a safe no-op here, the
-            // same shape as BoatHelm reporting "Helm in use": informative, not actionable.
+            // Nothing to pour in - just read the gauge. Tapping does nothing here, the same
+            // shape as BoatHelm reporting "Helm in use": informative, not actionable.
             return $"Fuel tank: {_liters.Value:0}/{capacityLiters:0} L";
         }
 
-        public void Interact(NetworkPlayer player)
-        {
-            // Reachable both from the interaction raycast and could otherwise double-toggle
-            // in one frame - same guard as the ladder, the helm, the crane.
-            if (_lastToggleFrame == Time.frameCount) return;
-            _lastToggleFrame = Time.frameCount;
-            if (!IsSpawned || player == null || NetworkManager == null) return;
+        /// <summary>Tap does nothing - see the class summary. Required by IInteractable, but
+        /// every actual behaviour lives in InteractHeld/InteractReleased below.</summary>
+        public void Interact(NetworkPlayer player) { }
 
+        public void InteractHeld(NetworkPlayer player)
+        {
+            if (!IsSpawned || player == null || NetworkManager == null) return;
             ulong localId = NetworkManager.LocalClientId;
 
-            if (_refuelerClientId.Value == localId)
-            {
-                LocalRefuelSource = null;
-                if (LocalActive == this) LocalActive = null;
-                if (IsServer) StopRefuel(); else RequestStopRefuelServerRpc();
-                return;
-            }
+            // Already pouring as us, or already asked and waiting on the server - nothing
+            // more to do until the hold ends.
+            if (_refuelerClientId.Value == localId || _startRequestedThisHold) return;
             if (_refuelerClientId.Value != NoRefueler) return;   // someone else already pouring
 
             var container = HeldContainer(player);
             if (container == null) return;
             var netObj = container.GetComponent<NetworkObject>();
             if (netObj == null || !netObj.IsSpawned) return;
+            if (container.IsEmpty || _liters.Value >= capacityLiters - 0.01f) return;
+
+            // Sent once per hold, not once per frame - the server session persists on its own
+            // once started (see the class summary).
+            _startRequestedThisHold = true;
 
             // Optimistic, and purely local - if the server refuses (tank filled a moment ago
             // on another peer's input, say), OnRefuelerChanged unwinds this the instant the
@@ -185,6 +193,16 @@ namespace Game.World
 
             if (IsServer) ServerStartRefuel(localId, netObj);
             else RequestStartRefuelServerRpc(netObj);
+        }
+
+        public void InteractReleased(NetworkPlayer player)
+        {
+            _startRequestedThisHold = false;
+            if (LocalActive != this) return;   // this peer never actually started a pour here
+
+            LocalRefuelSource = null;
+            LocalActive = null;
+            if (IsServer) StopRefuel(); else RequestStopRefuelServerRpc();
         }
 
         private static FuelContainer HeldContainer(NetworkPlayer player)
@@ -246,15 +264,20 @@ namespace Game.World
         {
             if (!IsServer || _refuelerClientId.Value == NoRefueler) return;
 
-            // Validated every tick rather than only at start: the container can be dropped,
-            // thrown, emptied by this same transfer, or walked away from at any point, and any
-            // of those should end the session quietly rather than leave it stuck open.
+            // Ownership and capacity are still checked every tick, as a safety net independent
+            // of the refuelling client's own explicit stop - a container thrown away, or one
+            // that simply runs dry mid-pour, has to end the session even if that client's
+            // InteractReleased never arrives (a dropped packet, a client that vanished).
+            //
+            // Physical DISTANCE is deliberately not checked here any more - that used to be
+            // exactly the bug (see the class summary). "Is the player still doing this" is
+            // InteractionSystem's job, gating whether InteractHeld gets called at all; a
+            // second, cruder version of that same question re-litigated here every tick was
+            // never buying any correctness, only flicker.
             if (_serverContainerObject == null || !_serverContainerObject.IsSpawned
                 || _serverContainerObject.OwnerClientId != _refuelerClientId.Value
                 || _serverContainer.IsEmpty
-                || _liters.Value >= capacityLiters - 0.01f
-                || Vector3.Distance(_serverContainerObject.transform.position, transform.position)
-                   > MaxRefuelDistance)
+                || _liters.Value >= capacityLiters - 0.01f)
             {
                 StopRefuel();
                 return;

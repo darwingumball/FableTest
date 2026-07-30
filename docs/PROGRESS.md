@@ -580,6 +580,26 @@ MapCamera — prefabs cannot store scene references, so that link lives on the i
     few calls made before the fix), destroying by name has to walk every child and collect ALL
     matches first, not stop at the first hit.
 
+65. **A per-tick server validation check needs to ask the same question the client-side gate
+    already asks, or it becomes a second, cruder copy of that gate that disagrees with it.**
+    `FuelTank`'s first refuel implementation kept a pour open by checking, every server tick,
+    that the container's WORLD POSITION stayed within ~1.6 m of the tank. That is not what
+    "is the player still refuelling" actually means - a physics-carried item springs around its
+    hold target and routinely drifts past a metre, especially heavy items (fuel barrels).
+    Re-litigating proximity server-side on a timer produced exactly the reported symptom:
+    refuelling "flickered" and "had to get lucky to stay on", because the ACTUAL gate for
+    "still doing this" already existed one layer up - `InteractionSystem`'s own raycast, run
+    once, telling you precisely whether the tank is still under the crosshair - and the tank
+    was asking a second, unrelated, much stricter question behind that and failing it randomly.
+    **The fix was a new interaction verb, not a tighter tolerance.** `IHoldInteractable`
+    (`InteractHeld`/`InteractReleased`) lets `InteractionSystem` be the single place that
+    decides "is this still happening", firing `InteractReleased` the exact frame the button
+    lifts OR the aim moves off OR range is lost - and removes the redundant distance check
+    server-side entirely, keeping only ownership/capacity as a safety net for cases the client
+    can't self-report (a dropped disconnect). General lesson: if two different layers are both
+    independently deciding whether an ongoing action should continue, look for the one that is
+    actually authoritative for that question and delete the other.
+
 58. **Never read a component off a scene you have just closed.** `EditorSceneManager.CloseScene`
     destroys the objects, so a `Debug.Log` at the end of a builder that reports
     `zone.Index` throws `MissingReferenceException` *after* the scene has already been saved
@@ -1120,6 +1140,73 @@ is fed in, stepping by any OTHER increment would make most presses of R invisibl
 would snap right back over them). Reading the live zone is what makes every press move the
 ghost to the next legal facing. Away from any zone (nothing to snap to) it falls back to a
 fixed 45°, purely cosmetic there.
+
+### Design note for future ship/home builders: zone kinds and dry hulls (2026-07-29)
+
+Evan asked how a future developer should set up **cargo areas, no-placement areas, furniture
+areas, and dry-hull interiors** when building a new ship or home. All four already exist as
+composable pieces — there is no new "zone type" system to add, only a pattern to follow:
+
+- **A cargo area is a `PlacementZone`** with `yawSnapDegrees` around 30 and `attachRoot`
+  pointed at the deck's own rolling twin if the vessel rolls (see `RollingTwin` in
+  `CrabBoatBuilder`) so lashed cargo leans with the hull.
+- **A furniture area is the same `PlacementZone`**, just with a finer `yawSnapDegrees` (15, or
+  go finer still for a room where "more rotation degrees" — i.e. more facings to choose from —
+  matters more than square corners) and usually no rolling parent, since buildings do not tilt.
+- **A non-placeable area is the ABSENCE of a `PlacementZone`.** There is nothing to build - a
+  region with no zone over it cannot be planned into, and `PlacementZone.Find` simply never
+  returns one there. Two zones are free to sit right next to each other with dead space between
+  them; nothing needs to be marked "off".
+- **A dry hull interior is a `DryHullVolume`** (see "Hulls below the waterline" below), added
+  the same way `WaterBuilder.BuildHold` already does it for the tug: sized to run OUT through
+  the hull plating (not stop at the interior wall), independently of whatever `PlacementZone`
+  and stencil-exclusion geometry share that same room.
+
+None of these four interact with each other structurally - a room can have a `DryHullVolume` for
+air, a `PlacementZone` for furniture, and simply no zone at all in its closet, all authored as
+separate, independent components in the same builder method. The only thing a new builder has
+to get right is **giving every host object (the boat/property root) a unique, stable name** -
+see the save/load note directly below for why that now matters beyond just `CargoAnchor` lookup.
+
+### Placed cargo now survives a save/load (2026-07-29)
+
+Evan asked directly: does furniture placed in a home, or cargo lashed to a deck, survive a save?
+Before this, no - `SaveSystem` covered world time/weather/quest flags and each player's own
+inventory, and nothing else. Decorating a property or loading a ship's hold would have reset on
+every reload, which defeats the entire point of a Home system.
+
+`SaveSystem.CargoSave` now captures every `CargoAttachment` currently `IsAttached` to a
+`PlacementZone` (deliberately NOT ones on a `CraneHook` - cargo mid-lift is a moment in time, not
+decor, and would just come back as a loose item floating over the anchor; skipping it and
+letting it fall back to ordinary physics on the next load is simpler and correct). Each entry is
+`{hostName, anchorIndex, itemId, quantity, localPosition, localRotation}`.
+
+**`hostName` is the host GameObject's own NAME, not a `NetworkObjectId`.** `CargoAnchor` already
+names an anchor as "index N under NetworkObject H" for live network traffic, but scene-object
+NetworkObjectIds are reassigned fresh, in arbitrary order, on every single load (gotcha 8) - a
+ship's id last session tells you nothing about which object is the same ship this session. The
+GameObject's name (`"TestCrabBoat"`, `"Apartment Floor"`) is already stable across rebuilds
+because every builder in this project treats it that way for its OWN idempotent-rebuild lookups
+(`if (existing.name == BOAT_NAME) DestroyImmediate(...)`), so reusing it for save identity adds
+no new authoring burden - it just means **host names must stay unique**, project-wide, which was
+already an implicit assumption everywhere else.
+
+Restore (`SaveService.RestoreCargo`, gated the same as world/quest restore - continuing a save,
+host only) resolves the host by scanning currently-spawned `NetworkObject`s for a name match,
+resolves the anchor via the existing `CargoAnchor.Find`, spawns a fresh instance of the item
+through `WorldItemManager.ServerSpawnItem`, and immediately calls `CargoAttachment.
+ServerAttachLocal` on it - the brief instant at the anchor's rough position before that snap
+lands is invisible in practice. A saved entry whose host no longer exists, or whose anchor index
+a rebuilt vessel no longer has, is dropped with a warning rather than failing the whole restore.
+`RestoreWorldDeferred`'s wait condition grew one more entry, `WorldItemManager.Instance`, since
+restoring cargo means spawning through it.
+
+**Known gap, flagged rather than silently left:** only PLACED (zone-attached) cargo is saved.
+Loose items dropped or left lying around elsewhere in the world do not persist - that is a much
+bigger feature (tracking arbitrary dynamic world state with no natural "host" to key off) than
+"my furniture survives a reload", and was not what was asked for. Also not saved: a `FuelTank`'s
+current litres, or a `Generator`'s running state - both reset to their authored starting values
+on load, which is a separate, smaller gap worth closing later if it turns out to matter.
 
 
 ## Admin console

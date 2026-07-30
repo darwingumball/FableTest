@@ -44,6 +44,11 @@ namespace Game.Interaction
         private InputAction _interactAction;
         private string _lastPrompt;
 
+        // The IHoldInteractable currently receiving InteractHeld ticks, or null. Tracked
+        // separately from Current because a hold has to end the instant a NEW frame's
+        // conditions fail, whichever of button/aim/range broke first.
+        private IHoldInteractable _held;
+
         private void Awake()
         {
             _player = GetComponentInParent<NetworkPlayer>();
@@ -102,6 +107,45 @@ namespace Game.Interaction
 
             if (Current != null && _interactAction != null && _interactAction.WasPressedThisFrame())
                 Current.Interact(_player);
+
+            UpdateHold();
+        }
+
+        /// <summary>
+        /// Drives <see cref="IHoldInteractable"/>. The button being held AND this frame's
+        /// Current both being true for the SAME object is the only condition for continuing -
+        /// which is also exactly what ends it: the moment either goes false (button released,
+        /// aim moved off, walked out of range), the held interactable gets exactly one
+        /// InteractReleased call and nothing more.
+        /// </summary>
+        private void UpdateHold()
+        {
+            bool pressed = _interactAction != null && _interactAction.IsPressed();
+            var candidate = pressed ? Current as IHoldInteractable : null;
+
+            // Covers the button being released, the aim moving off entirely, AND the aim
+            // sweeping straight from one IHoldInteractable to a different one in a single
+            // frame - the old one always gets its release before the new one ever starts.
+            if (candidate != _held && _held != null)
+            {
+                _held.InteractReleased(_player);
+                _held = null;
+            }
+
+            if (candidate != null)
+            {
+                _held = candidate;
+                _held.InteractHeld(_player);
+            }
+        }
+
+        // Same cleanup pattern as Ladder's OnDisable - an active hold should not outlive the
+        // component that was driving it (player disabled, disconnected, destroyed).
+        private void OnDisable()
+        {
+            if (_held == null) return;
+            _held.InteractReleased(_player);
+            _held = null;
         }
 
         public void SetCamera(Camera cam) => playerCamera = cam;

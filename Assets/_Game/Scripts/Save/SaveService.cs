@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Game.Core;
+using Game.Interaction;
 using Game.Inventory;
 using Game.Net;
 using Game.Quests;
@@ -91,6 +92,7 @@ namespace Game.Save
                 world.weatherIntensity = intensity;
             }
             SaveSystem.WriteWorld(Slot, world);
+            SaveSystem.WriteCargo(Slot, CaptureCargo());
 
             if (NetworkQuestSync.Instance != null)
             {
@@ -172,22 +174,63 @@ namespace Game.Save
             return record;
         }
 
+        /// <summary>
+        /// Every piece of cargo currently lashed into a PLACEMENT ZONE, anywhere in the scene -
+        /// furniture in a property, crates on a deck. Deliberately NOT cargo on a crane hook:
+        /// something mid-lift is a moment in time, not decor, and restoring it hanging from a
+        /// hook nobody is operating would just be a loose item floating in the air. A hook-held
+        /// item simply is not saved and comes back as ordinary loose physics on next load.
+        ///
+        /// Known gap, not addressed here: loose items dropped or left lying around elsewhere in
+        /// the world are NOT saved at all - only things actually placed into a zone. Persisting
+        /// every stray object everywhere is a much bigger feature (tracking arbitrary dynamic
+        /// world state with no natural "host" to key off) than "my furniture survives a reload".
+        /// </summary>
+        private static SaveSystem.CargoSave CaptureCargo()
+        {
+            var entries = new List<SaveSystem.CargoSave.Entry>();
+            foreach (var attachment in FindObjectsByType<CargoAttachment>(FindObjectsSortMode.None))
+            {
+                if (!attachment.IsAttached || attachment.Anchor is not PlacementZone zone) continue;
+
+                var host = zone.Host;
+                var item = attachment.GetComponent<WorldItem>();
+                if (host == null || item == null || item.itemData == null) continue;
+
+                entries.Add(new SaveSystem.CargoSave.Entry
+                {
+                    hostName = host.gameObject.name,
+                    anchorIndex = zone.Index,
+                    itemId = item.itemData.Id,
+                    quantity = item.quantity,
+                    localPosition = attachment.transform.localPosition,
+                    localRotation = attachment.transform.localRotation,
+                });
+            }
+            return new SaveSystem.CargoSave { entries = entries.ToArray() };
+        }
+
         // ---------------- loading ----------------
 
         private System.Collections.IEnumerator RestoreWorldDeferred()
         {
-            // Wait until the systems we write into exist and are spawned.
+            // Wait until the systems we write into exist and are spawned. WorldItemManager is
+            // in this list too now - restoring cargo means spawning fresh item instances
+            // through it, and it must have finished its OWN OnNetworkSpawn (the initial
+            // scatter) before anything else touches it.
             float timeout = 5f;
             while (timeout > 0f
                    && (NetworkTimeSync.Instance == null || !NetworkTimeSync.Instance.IsSpawned
                        || WeatherManager.Instance == null || !WeatherManager.Instance.IsSpawned
-                       || NetworkQuestSync.Instance == null || !NetworkQuestSync.Instance.IsSpawned))
+                       || NetworkQuestSync.Instance == null || !NetworkQuestSync.Instance.IsSpawned
+                       || WorldItemManager.Instance == null || !WorldItemManager.Instance.IsSpawned))
             {
                 timeout -= Time.deltaTime;
                 yield return null;
             }
             yield return null; // let their own OnNetworkSpawn defaults land first
             RestoreWorld();
+            RestoreCargo();
         }
 
         private void RestoreWorld()
@@ -216,6 +259,67 @@ namespace Game.Save
                 }
                 NetworkQuestSync.Instance.ServerApplySharedState(shared);
             }
+        }
+
+        /// <summary>
+        /// Re-spawns and re-lashes everything <see cref="CaptureCargo"/> recorded. The host is
+        /// resolved by NAME among currently spawned NetworkObjects rather than by id, because
+        /// scene-object NetworkObjectIds are reassigned fresh (and in arbitrary order) on every
+        /// load - see the CargoSave.Entry doc comment. A host that no longer exists, or an
+        /// anchor index a rebuilt vessel no longer has, just drops that one entry with a
+        /// warning rather than failing the whole restore.
+        /// </summary>
+        private void RestoreCargo()
+        {
+            var cargo = SaveSystem.LoadCargo(Slot);
+            if (cargo == null || cargo.entries.Length == 0) return;
+            if (WorldItemManager.Instance == null)
+            {
+                Debug.LogWarning("[SaveService] No WorldItemManager - cannot restore cargo.");
+                return;
+            }
+
+            var hostsByName = new Dictionary<string, NetworkObject>();
+            foreach (var netObj in FindObjectsByType<NetworkObject>(FindObjectsSortMode.None))
+                if (netObj.IsSpawned) hostsByName.TryAdd(netObj.gameObject.name, netObj);
+
+            int restored = 0;
+            foreach (var entry in cargo.entries)
+            {
+                if (!hostsByName.TryGetValue(entry.hostName, out var host))
+                {
+                    Debug.LogWarning($"[SaveService] Cargo restore: no host '{entry.hostName}' " +
+                                     $"in the scene - dropping a saved '{entry.itemId}'.");
+                    continue;
+                }
+
+                var anchor = CargoAnchor.Find(new NetworkObjectReference(host), entry.anchorIndex);
+                if (anchor == null)
+                {
+                    Debug.LogWarning($"[SaveService] Cargo restore: '{entry.hostName}' has no " +
+                                     $"anchor at index {entry.anchorIndex} any more - dropping " +
+                                     $"a saved '{entry.itemId}'.");
+                    continue;
+                }
+
+                // Spawned at the anchor's own position rather than the saved local pose - the
+                // ServerAttachLocal call right after immediately reparents and repositions it
+                // exactly, so this is only ever visible for the one frame before that lands.
+                var go = WorldItemManager.Instance.ServerSpawnItem(entry.itemId, entry.quantity,
+                    anchor.AttachRoot.position, Vector3.zero);
+                var attachment = go != null ? go.GetComponent<CargoAttachment>() : null;
+                if (attachment == null)
+                {
+                    Debug.LogWarning($"[SaveService] Cargo restore: '{entry.itemId}' has no " +
+                                     "CargoAttachment - cannot re-lash it.");
+                    continue;
+                }
+
+                attachment.ServerAttachLocal(anchor, entry.localPosition, entry.localRotation);
+                restored++;
+            }
+
+            if (restored > 0) Debug.Log($"[SaveService] Restored {restored} placed item(s).");
         }
 
         private void OnClientConnected(ulong clientId) => RestorePlayer(clientId);

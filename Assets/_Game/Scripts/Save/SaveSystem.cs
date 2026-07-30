@@ -56,6 +56,7 @@ namespace Game.Save
         private static string MetaPath(int slot) => Path.Combine(SlotDir(slot), "meta.json");
         private static string WorldPath(int slot) => Path.Combine(SlotDir(slot), "world.json");
         private static string QuestsPath(int slot) => Path.Combine(SlotDir(slot), "quests.json");
+        private static string CargoPath(int slot) => Path.Combine(SlotDir(slot), "cargo.json");
         private static string PlayerPath(int slot, string authId) =>
             Path.Combine(SlotDir(slot), "players", SanitizeId(authId) + ".json");
 
@@ -95,6 +96,35 @@ namespace Game.Save
             public string questsJson = "";
         }
 
+        [Serializable]
+        public class CargoSave
+        {
+            public int version = 1;
+            public Entry[] entries = Array.Empty<Entry>();
+
+            /// <summary>
+            /// One piece of cargo lashed into a placement zone - furniture in a property, a
+            /// crate on a deck. <see cref="hostName"/> + <see cref="anchorIndex"/> is the same
+            /// pair <c>CargoAnchor</c> uses to name an anchor over the network, except here it
+            /// has to survive OUTSIDE a running session: <c>hostName</c> is the host
+            /// GameObject's own name (e.g. "TestCrabBoat", "Apartment Floor") rather than a
+            /// NetworkObjectId, because scene-object ids are reassigned fresh on every load in
+            /// arbitrary order (docs/PROGRESS.md gotcha 8) and would not point at the same
+            /// vessel twice. Every host a save can reference must therefore have a name that
+            /// stays unique and stable across rebuilds.
+            /// </summary>
+            [Serializable]
+            public struct Entry
+            {
+                public string hostName;
+                public int anchorIndex;
+                public string itemId;
+                public int quantity;
+                public Vector3 localPosition;
+                public Quaternion localRotation;
+            }
+        }
+
         // ---------------- payload IO (host only) ----------------
 
         public static void WriteWorld(int slot, WorldSave world) => WriteJson(WorldPath(slot), world);
@@ -102,6 +132,9 @@ namespace Game.Save
 
         public static void WriteQuests(int slot, QuestsSave quests) => WriteJson(QuestsPath(slot), quests);
         public static QuestsSave LoadQuests(int slot) => ReadJson<QuestsSave>(QuestsPath(slot));
+
+        public static void WriteCargo(int slot, CargoSave cargo) => WriteJson(CargoPath(slot), cargo);
+        public static CargoSave LoadCargo(int slot) => ReadJson<CargoSave>(CargoPath(slot));
 
         public static void WritePlayer(int slot, PlayerSave player)
         {
